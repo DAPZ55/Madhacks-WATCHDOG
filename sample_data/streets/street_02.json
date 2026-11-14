@@ -1,0 +1,65 @@
+{
+  "title": "Intersection",
+  "synthetic": true,
+  "model_scale": 0.1,
+  "hard": false,
+  "note": "Hard scenes contain road paint that color detection mistakes for utility marks.",
+  "utilities": [
+    {
+      "utility_id": "U-001",
+      "marking_color": "green",
+      "utility_class": "sewer",
+      "centerline_m": [
+        [
+          0.424,
+          0.252,
+          0.0
+        ],
+        [
+          0.424,
+          -0.859,
+          0.0
+        ]
+      ]
+    },
+    {
+      "utility_id": "U-002",
+      "marking_color": "orange",
+      "utility_class": "communications",
+      "centerline_m": [
+        [
+          -0.242,
+          -0.159,
+          0.0
+        ],
+        [
+          0.337,
+          -0.159,
+          0.0
+        ],
+        [
+          0.337,
+          0.24,
+          0.0
+        ]
+      ]
+    },
+    {
+      "utility_id": "U-003",
+      "marking_color": "blue",
+      "utility_class": "water",
+      "centerline_m": [
+        [
+          -0.228,
+          -0.424,
+          0.0
+        ],
+        [
+          1.075,
+          -0.424,
+          0.0
+        ]
+      ]
+    }
+  ]
+}

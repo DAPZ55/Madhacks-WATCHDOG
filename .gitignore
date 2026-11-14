@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+.DS_Store
+# Xcode: project is generated from ios/project.yml (cd ios && xcodegen)
+ios/build/
+ios/Vision811.xcodeproj/
+ios/Info.plist
+# Scan outputs, regenerated on every scan
+sample_data/scan_source.jpg
+sample_data/scan_preview.jpg
+sample_data/scan.json
+sample_data/synthetic_photo.jpg
+# Design-tool state
+.impeccable/

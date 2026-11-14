@@ -1,0 +1,43 @@
+{
+  "title": "Double yellow + fire lane curb (hard)",
+  "synthetic": true,
+  "model_scale": 0.1,
+  "hard": true,
+  "note": "Hard scenes contain road paint that color detection mistakes for utility marks.",
+  "utilities": [
+    {
+      "utility_id": "U-001",
+      "marking_color": "yellow",
+      "utility_class": "gas",
+      "centerline_m": [
+        [
+          -0.228,
+          -0.424,
+          0.0
+        ],
+        [
+          1.075,
+          -0.424,
+          0.0
+        ]
+      ]
+    },
+    {
+      "utility_id": "U-002",
+      "marking_color": "red",
+      "utility_class": "electric",
+      "centerline_m": [
+        [
+          0.568,
+          0.252,
+          0.0
+        ],
+        [
+          0.568,
+          -0.859,
+          0.0
+        ]
+      ]
+    }
+  ]
+}

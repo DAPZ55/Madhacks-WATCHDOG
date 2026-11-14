@@ -1,0 +1,27 @@
+# Regenerate Xcode project: cd ios && xcodegen
+name: Vision811
+options:
+  bundleIdPrefix: dev.madhacks
+  deploymentTarget:
+    iOS: "18.0"
+targets:
+  Vision811:
+    type: application
+    platform: iOS
+    sources: [App]
+    info:
+      path: Info.plist
+      properties:
+        NSCameraUsageDescription: Camera shows the site and finds anchor tags for the AR overlay.
+        NSLocalNetworkUsageDescription: Downloads the site map from the local edge server.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        UILaunchScreen: {}
+        UIRequiredDeviceCapabilities: [arkit]
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+    settings:
+      base:
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: R4K79NWG5A

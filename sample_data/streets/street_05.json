@@ -1,0 +1,82 @@
+{
+  "title": "Busy intersection (hard)",
+  "synthetic": true,
+  "model_scale": 0.1,
+  "hard": true,
+  "note": "Hard scenes contain road paint that color detection mistakes for utility marks.",
+  "utilities": [
+    {
+      "utility_id": "U-001",
+      "marking_color": "green",
+      "utility_class": "sewer",
+      "centerline_m": [
+        [
+          0.452,
+          0.252,
+          0.0
+        ],
+        [
+          0.452,
+          -0.859,
+          0.0
+        ]
+      ]
+    },
+    {
+      "utility_id": "U-002",
+      "marking_color": "orange",
+      "utility_class": "communications",
+      "centerline_m": [
+        [
+          -0.242,
+          -0.147,
+          0.0
+        ],
+        [
+          1.089,
+          -0.147,
+          0.0
+        ]
+      ]
+    },
+    {
+      "utility_id": "U-003",
+      "marking_color": "blue",
+      "utility_class": "water",
+      "centerline_m": [
+        [
+          0.134,
+          -0.859,
+          0.0
+        ],
+        [
+          0.134,
+          -0.424,
+          0.0
+        ],
+        [
+          1.089,
+          -0.424,
+          0.0
+        ]
+      ]
+    },
+    {
+      "utility_id": "U-004",
+      "marking_color": "red",
+      "utility_class": "electric",
+      "centerline_m": [
+        [
+          0.684,
+          0.252,
+          0.0
+        ],
+        [
+          0.684,
+          -0.11,
+          0.0
+        ]
+      ]
+    }
+  ]
+}

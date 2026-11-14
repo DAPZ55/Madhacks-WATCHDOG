@@ -1,0 +1,70 @@
+{
+  "title": "Service laterals",
+  "synthetic": true,
+  "model_scale": 0.1,
+  "hard": false,
+  "note": "Hard scenes contain road paint that color detection mistakes for utility marks.",
+  "utilities": [
+    {
+      "utility_id": "U-001",
+      "marking_color": "red",
+      "utility_class": "electric",
+      "centerline_m": [
+        [
+          -0.228,
+          -0.424,
+          0.0
+        ],
+        [
+          0.424,
+          -0.424,
+          0.0
+        ],
+        [
+          0.713,
+          -0.147,
+          0.0
+        ],
+        [
+          1.089,
+          -0.147,
+          0.0
+        ]
+      ]
+    },
+    {
+      "utility_id": "U-002",
+      "marking_color": "yellow",
+      "utility_class": "gas",
+      "centerline_m": [
+        [
+          0.163,
+          0.252,
+          0.0
+        ],
+        [
+          0.163,
+          -0.859,
+          0.0
+        ]
+      ]
+    },
+    {
+      "utility_id": "U-003",
+      "marking_color": "purple",
+      "utility_class": "reclaimed_water",
+      "centerline_m": [
+        [
+          -0.242,
+          -0.207,
+          0.0
+        ],
+        [
+          0.568,
+          -0.207,
+          0.0
+        ]
+      ]
+    }
+  ]
+}

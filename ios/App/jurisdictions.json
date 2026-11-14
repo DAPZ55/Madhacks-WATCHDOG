@@ -1,0 +1,81 @@
+{
+  "_note": "Display-only reference data. cover_in = MINIMUM cover required at installation, in inches. It is never a measured depth. verified=false means the figure is typical practice or was not confirmed against the primary source; check before relying on it.",
+  "jurisdictions": [
+    {
+      "id": "WI",
+      "name": "Wisconsin",
+      "one_call": "Diggers Hotline",
+      "law": "Wis. Stat. 182.0175",
+      "tolerance_in": 18,
+      "tolerance_note": "Keep 18 in clearance from a marked, unexposed facility",
+      "tolerance_verified": true,
+      "entries": [
+        {"color": "red", "label": "Electric power", "cover_in": 30, "basis": "NESC Rule 352, 601 V to 50 kV (adopted by PSC 114)", "verified": false},
+        {"color": "yellow", "label": "Gas, oil, steam, petroleum", "cover_in": 24, "basis": "49 CFR 192.327, gas mains (adopted by PSC 135)", "verified": true},
+        {"color": "orange", "label": "Communications, alarm, signal", "cover_in": 24, "basis": "Typical practice; no statewide minimum", "verified": false},
+        {"color": "blue", "label": "Water, irrigation, slurry", "cover_in": 72, "basis": "SPS 382.40(8): below predicted frost depth; 6 ft is typical municipal practice", "verified": false},
+        {"color": "green", "label": "Sewer, drain", "cover_in": 42, "basis": "SPS 382.30(11)(c): building sewer top at least 42 in deep", "verified": true},
+        {"color": "purple", "label": "Reclaimed water", "cover_in": null, "basis": "No figure", "verified": false},
+        {"color": "pink", "label": "Temporary survey marks", "cover_in": null, "basis": "Not a buried facility", "verified": true},
+        {"color": "white", "label": "Proposed excavation", "cover_in": null, "basis": "Not a buried facility", "verified": true}
+      ]
+    },
+    {
+      "id": "NY",
+      "name": "New York",
+      "one_call": "UDig NY / New York 811",
+      "law": "16 NYCRR Part 753",
+      "tolerance_in": 24,
+      "tolerance_note": "2 ft either side of the centerline, plus half the facility width when known",
+      "tolerance_verified": true,
+      "entries": [
+        {"color": "red", "label": "Electric power lines, cables, conduit", "cover_in": 30, "basis": "NESC Rule 352, 601 V to 50 kV", "verified": false},
+        {"color": "yellow", "label": "Gas, oil, steam, petroleum", "cover_in": 24, "basis": "49 CFR 192.327 / 16 NYCRR 255.327, gas mains", "verified": true},
+        {"color": "orange", "label": "Communication, alarm, signal lines", "cover_in": 24, "basis": "Typical practice; no statewide minimum", "verified": false},
+        {"color": "blue", "label": "Potable water", "cover_in": 48, "basis": "Typical frost-protection practice (about 4 ft)", "verified": false},
+        {"color": "green", "label": "Sewers and drain lines", "cover_in": 48, "basis": "Typical frost-protection practice (about 4 ft)", "verified": false},
+        {"color": "purple", "label": "Reclaimed water, irrigation, slurry", "cover_in": null, "basis": "No figure", "verified": false},
+        {"color": "pink", "label": "Temporary survey markings", "cover_in": null, "basis": "Not a buried facility", "verified": true},
+        {"color": "white", "label": "Proposed excavation", "cover_in": null, "basis": "Not a buried facility", "verified": true}
+      ]
+    },
+    {
+      "id": "CHI",
+      "name": "Chicago",
+      "one_call": "Chicago 811",
+      "law": "Chicago Municipal Code ch. 10-21",
+      "tolerance_in": 18,
+      "tolerance_note": "Strip at least 36 in wide: facility width plus 18 in either side. Hand dig inside it",
+      "tolerance_verified": true,
+      "entries": [
+        {"color": "red", "label": "Electric power lines, cables, conduit", "cover_in": 30, "basis": "NESC Rule 352, 601 V to 50 kV", "verified": false},
+        {"color": "yellow", "label": "Gas, oil, steam, petroleum", "cover_in": 24, "basis": "49 CFR 192.327, gas mains", "verified": true},
+        {"color": "orange", "label": "Communication, alarm, signal lines", "cover_in": 24, "basis": "Typical practice; no citywide minimum found", "verified": false},
+        {"color": "blue", "label": "Potable water", "cover_in": 60, "basis": "Chicago code: building water mains minimum 60 in ground cover", "verified": true},
+        {"color": "green", "label": "Sewers and drain lines", "cover_in": 60, "basis": "Typical frost-protection practice (about 5 ft)", "verified": false},
+        {"color": "purple", "label": "Reclaimed water, irrigation, slurry", "cover_in": null, "basis": "No figure", "verified": false},
+        {"color": "pink", "label": "Temporary survey markings", "cover_in": null, "basis": "Not a buried facility", "verified": true},
+        {"color": "white", "label": "Proposed excavation", "cover_in": null, "basis": "Not a buried facility", "verified": true}
+      ]
+    },
+    {
+      "id": "TX",
+      "name": "Texas",
+      "one_call": "Texas811",
+      "law": "Tex. Util. Code ch. 251",
+      "tolerance_in": 18,
+      "tolerance_note": "Half the facility's nominal diameter plus 18 in either side",
+      "tolerance_verified": false,
+      "entries": [
+        {"color": "red", "label": "Electric power lines, cables, conduit", "cover_in": 30, "basis": "NESC Rule 352, 601 V to 50 kV", "verified": false},
+        {"color": "yellow", "label": "Gas, oil, steam, petroleum", "cover_in": 24, "basis": "49 CFR 192.327, gas mains", "verified": true},
+        {"color": "orange", "label": "Communication, alarm, signal lines", "cover_in": 24, "basis": "Typical practice; no statewide minimum", "verified": false},
+        {"color": "blue", "label": "Potable water", "cover_in": 24, "basis": "30 TAC 290.44(a)(4): at least 24 in cover", "verified": true},
+        {"color": "green", "label": "Sewers and drain lines", "cover_in": 24, "basis": "Typical practice; shallow frost", "verified": false},
+        {"color": "purple", "label": "Reclaimed water, irrigation, slurry", "cover_in": null, "basis": "No figure", "verified": false},
+        {"color": "pink", "label": "Temporary survey markings", "cover_in": null, "basis": "Not a buried facility", "verified": true},
+        {"color": "white", "label": "Proposed excavation", "cover_in": null, "basis": "Not a buried facility", "verified": true}
+      ]
+    }
+  ]
+}
