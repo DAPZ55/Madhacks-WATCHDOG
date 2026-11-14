@@ -243,7 +243,9 @@ const liveUrl = () => '/camera?state=' + $('liveState').value + ($('liveScale').
 $('liveToggle').onclick = () => {
   const on = $('live').hidden;
   $('live').hidden = !on;
-  $('live').src = on ? liveUrl() : '';  // clearing src closes the stream and frees the camera
+  // Some browsers keep an MJPEG connection alive after src is cleared; swapping the element drops it.
+  const fresh = $('live').cloneNode(); fresh.removeAttribute('src'); $('live').replaceWith(fresh);
+  if (on) fresh.src = liveUrl();
   $('liveToggle').textContent = on ? 'Stop live view' : 'Start live view';
 };
 $('liveScale').onchange = $('liveState').onchange = () => { if (!$('live').hidden) $('live').src = liveUrl(); };

@@ -20,10 +20,12 @@ def detect(img: np.ndarray) -> dict[int, np.ndarray]:
     return {} if ids is None else {int(i): c.reshape(4, 2) for i, c in zip(ids.flatten(), corners)}
 
 
-# Calibration knob: focal length in pixels at 1920 px image width. 1360 = Logitech C920-family
-# (70 deg horizontal FOV). With a near-overhead camera a wrong value barely matters:
-# it scales depth, and lateral distance = pixel offset * depth / focal cancels it.
-FOCAL_PX_AT_1920 = 1360.0
+# Calibration knob: focal length in pixels at 1920 px image width.
+# 1990 = Logitech Brio 105 (58 degree diagonal field of view, from its spec sheet; not measured).
+# Other cameras: f = 960 / tan(horizontal_fov / 2). C920-family (70 degrees) is 1360.
+# With a near-overhead camera a wrong value barely affects distances: it scales depth, and
+# lateral distance = pixel offset * depth / focal cancels it. It does shift the drawn pipe depth.
+FOCAL_PX_AT_1920 = 1990.0
 
 
 def survey(img: np.ndarray, size_m: float, tags: dict[int, np.ndarray] | None = None) -> dict[str, tuple[float, float]]:

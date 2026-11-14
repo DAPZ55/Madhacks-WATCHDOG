@@ -67,11 +67,13 @@ def pinhole_photo(tag_m=0.15, ppm=500):
         tag = cv2.cvtColor(cv2.resize(tag_image(i, 600), (full, full), interpolation=cv2.INTER_AREA), cv2.COLOR_GRAY2BGR)
         cx, cy = round((x + 0.4) * ppm), round((2.4 - y) * ppm)
         ground[cy - full // 2:cy - full // 2 + full, cx - full // 2:cx - full // 2 + full] = tag
-    # Camera 3.2 m above site center, tilted 12 deg. World: x right, y up (site), z up.
+    # Camera above site center, tilted 12 deg; height chosen so the site fills the view whatever
+    # the focal length knob is. World: x right, y up (site), z up.
+    height = 3.2 * FOCAL_PX_AT_1920 / 1360
     k = np.float64([[FOCAL_PX_AT_1920, 0, 960], [0, FOCAL_PX_AT_1920, 540], [0, 0, 1]])
     tilt = np.radians(12)
     r = np.float64([[1, 0, 0], [0, -np.cos(tilt), -np.sin(tilt)], [0, np.sin(tilt), -np.cos(tilt)]])
-    tvec = -r @ np.float64([1.0, 1.0 - 3.2 * np.tan(tilt), 3.2])
+    tvec = -r @ np.float64([1.0, 1.0 - height * np.tan(tilt), height])
     world_to_img = k @ np.column_stack([r[:, 0], r[:, 1], tvec])  # ground plane z = 0
     canvas_to_world = np.float64([[1 / ppm, 0, -0.4], [0, -1 / ppm, 2.4], [0, 0, 1]])
     return cv2.warpPerspective(ground, world_to_img @ canvas_to_world, (1920, 1080))

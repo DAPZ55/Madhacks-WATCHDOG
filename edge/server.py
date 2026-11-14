@@ -95,14 +95,16 @@ def rollback(revision: int):
 
 # ---------- camera ----------
 
-_surveys: deque = deque(maxlen=15)  # recent live-view measurements, median-smoothed
-_last_frame: dict = {}  # newest raw camera frame + time, for capture while the live view runs
-_cam_lock = threading.Lock()  # V4L2 allows one opener; never open the camera twice
+_surveys: deque = deque(maxlen=15)  # live-view measurements, only for the on-screen distances
+# One background thread owns the camera and keeps the newest frame here. Viewers, capture, and
+# survey all read from it, so a stalled browser connection can never keep the camera to itself.
+_cam: dict = {"thread": None, "frame": None, "seq": 0, "wanted": 0.0, "error": None}
+CAMERA_IDLE_S = 5  # reader closes the camera this long after the last consumer
 
 
 def _camera_index() -> int | None:
     """Which camera to open. Override with env VISION811_CAMERA=<index>.
-    On the UNO Q the first video nodes are the SoC's codec (qcom-venus), not a camera: skip them."""
+    On the UNO Q some video nodes are the SoC's codec (qcom-venus), not a camera: skip them."""
     if os.environ.get("VISION811_CAMERA"):
         return int(os.environ["VISION811_CAMERA"])
     if not sys.platform.startswith("linux"):
@@ -115,37 +117,54 @@ def _camera_index() -> int | None:
     return None
 
 
-def _open_camera() -> cv2.VideoCapture:
-    index = _camera_index()
-    if index is None:
-        raise HTTPException(503, "no camera found: plug the webcam into the hub")
+def _camera_reader(index: int):
     cam = cv2.VideoCapture(index)
     cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))  # 1080p at a usable rate over USB 2
     cam.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
     cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-    if not cam.isOpened():
-        raise HTTPException(503, f"camera {index} did not open")
-    return cam
+    try:
+        warmup = 8  # auto-exposure still settling
+        while time.time() - _cam["wanted"] < CAMERA_IDLE_S:
+            ok, img = cam.read()
+            if not ok:
+                _cam["error"] = f"camera {index} stopped delivering frames"
+                return
+            if warmup:
+                warmup -= 1
+                continue
+            _cam.update(frame=img, seq=_cam["seq"] + 1, error=None)
+    finally:
+        cam.release()
+        _cam["frame"] = None
+
+
+def _next_frame(after: int, timeout: float = 6.0) -> tuple[np.ndarray, int]:
+    """Newest camera frame with sequence number > `after`. Starts the reader if needed."""
+    index = _camera_index()
+    if index is None:
+        raise HTTPException(503, "no camera found: plug the webcam into the hub")
+    _cam["wanted"] = time.time()
+    if _cam["thread"] is None or not _cam["thread"].is_alive():
+        _cam["error"] = None
+        _cam["thread"] = threading.Thread(target=_camera_reader, args=(index,), daemon=True)
+        _cam["thread"].start()
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        frame, seq = _cam["frame"], _cam["seq"]
+        if frame is not None and seq > after:
+            return frame.copy(), seq
+        if _cam["error"]:
+            raise HTTPException(503, _cam["error"])
+        time.sleep(0.01)
+    raise HTTPException(503, "camera gave no frame in time")
 
 
 def _grab(count: int = 1) -> list[np.ndarray]:
-    """Fresh frames. Uses the live view's frames if it is running, else opens the camera briefly."""
-    if time.time() - _last_frame.get("t", 0) < 2:
-        return [_last_frame["img"]]
-    if not _cam_lock.acquire(timeout=3):
-        raise HTTPException(503, "camera busy")
-    try:
-        cam = _open_camera()
-        frames = []
-        for i in range(8 + count):  # first frames: auto-exposure still settling
-            ok, img = cam.read()
-            if ok and i >= 8:
-                frames.append(img)
-        cam.release()
-    finally:
-        _cam_lock.release()
-    if not frames:
-        raise HTTPException(503, "camera returned no frames")
+    """`count` distinct fresh frames."""
+    frames, seq = [], _cam["seq"]
+    for _ in range(count):
+        frame, seq = _next_frame(seq)
+        frames.append(frame)
     return frames
 
 
@@ -215,17 +234,11 @@ def _draw_ar(img: np.ndarray, tags: dict, m: dict, state: str, scale: float | No
 
 
 def _frames(state: str, scale: float | None):
-    if not _cam_lock.acquire(timeout=3):
-        return  # another viewer or a capture holds the camera
+    size_m = latest_map()["anchors"][0]["size_m"]
+    seq = _cam["seq"]
     try:
-        cam = _open_camera()
-        size_m = latest_map()["anchors"][0]["size_m"]
-        _surveys.clear()
         while True:
-            ok, img = cam.read()
-            if not ok:
-                break
-            _last_frame.update(img=img.copy(), t=time.time())
+            img, seq = _next_frame(seq)
             tags = detect(img)
             _draw_ar(img, tags, latest_map(), state, scale)
             for tag_id, corners in tags.items():  # outline anchors so aiming is easy
@@ -246,12 +259,10 @@ def _frames(state: str, scale: float | None):
             except ValueError:
                 cv2.putText(img, "need A1 + A2 in view to measure", (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 5)
             _, jpg = cv2.imencode(".jpg", cv2.resize(img, (960, 540)))
+            _, jpg = cv2.imencode(".jpg", cv2.resize(img, (960, 540)))
             yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpg.tobytes() + b"\r\n"
-    finally:
-        if "cam" in locals():
-            cam.release()
-        _last_frame.pop("t", None)
-        _cam_lock.release()
+    except HTTPException:
+        return  # camera unplugged mid-stream: end the stream quietly
 
 
 @app.get("/camera")
@@ -267,15 +278,14 @@ def camera(state: str = "WI", scale: float | None = None):
 # ---------- anchor survey ----------
 
 def _measured_anchors() -> dict[str, list[float]]:
-    """Anchor layout from the camera: live-view measurements if running, else a fresh burst of frames."""
-    surveys = list(_surveys) if time.time() - _last_frame.get("t", 0) < 2 else []
-    if not surveys:
-        size_m = latest_map()["anchors"][0]["size_m"]
-        for img in _grab(8):
-            try:
-                surveys.append(survey(img, size_m))
-            except ValueError:
-                pass
+    """Anchor layout measured from a fresh burst of camera frames."""
+    size_m = latest_map()["anchors"][0]["size_m"]
+    surveys = []
+    for img in _grab(8):
+        try:
+            surveys.append(survey(img, size_m))
+        except ValueError:
+            pass
     if not surveys:
         raise HTTPException(409, "cannot measure: A1 and A2 must both be in camera view")
     # A tag may fail to decode in a few frames; keep it if seen in at least half of them.
@@ -427,7 +437,7 @@ def status():
     return {"ok": True, "host": socket.gethostname(), "uptime_s": round(time.time() - STARTED),
             "published_revision": m and m["map_revision"], "published_at": m and m.get("published_at"),
             "utilities": m and len(m["utilities"]), "model_scale": m and m.get("model_scale", 1.0),
-            "camera": _camera_index() is not None, "live_view_running": time.time() - _last_frame.get("t", 0) < 2,
+            "camera": _camera_index() is not None, "camera_active": bool(_cam["thread"] and _cam["thread"].is_alive()),
             "candidate_waiting": CANDIDATE.exists()}
 
 
