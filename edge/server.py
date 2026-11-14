@@ -1,5 +1,17 @@
-"""811 Vision AR edge server. Run: ./run.sh"""
+"""811 Vision AR edge server. Mac dev: ./run.sh   UNO Q: systemd user service (edge/vision811.service).
+
+Workers (phones) only read:   GET /api/v1/maps/latest, /api/v1/status
+Admin panel (GET /) drives:   upload or capture -> candidate -> review -> publish
+ponytail: no admin login (owner's choice for the demo); private site Wi-Fi only.
+          Add a token check on every POST before any real use.
+"""
 import json
+import os
+import socket
+import subprocess
+import sys
+import threading
+import time
 from collections import deque
 from pathlib import Path
 
@@ -12,19 +24,38 @@ from edge.tags import FOCAL_PX_AT_1920, detect, survey
 from edge.vision import ScanError, scan
 
 app = FastAPI()
+ROOT = Path(__file__).parent.parent
+DATA = ROOT / "sample_data"
+MAP_FILE = DATA / "map.json"
+HISTORY = DATA / "history"  # one immutable file per published revision
+CANDIDATE = DATA / "candidate.json"  # scanned, waiting for the operator's approve/reject
+MAX_UPLOAD = 20 * 1024 * 1024
+STARTED = time.time()
 
-# ponytail: hand-written file stands in for the published revision; SQLite revisions in Phase 3.
-MAP_FILE = Path(__file__).parent.parent / "sample_data" / "map.json"
 
+# ---------- map storage ----------
 
 def latest_map() -> dict | None:
     return json.loads(MAP_FILE.read_text()) if MAP_FILE.exists() else None
 
 
-@app.get("/api/v1/status")
-def status():
-    m = latest_map()
-    return {"ok": True, "published_revision": m and m["map_revision"]}
+def _publish(m: dict, note: str) -> int:
+    """Every change to what phones see goes through here: new revision number, history copy,
+    atomic replace (a power cut mid-write must not corrupt the published map)."""
+    m["map_revision"] += 1
+    m["published_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    m["publish_note"] = note
+    text = json.dumps(m, indent=2)
+    HISTORY.mkdir(exist_ok=True)
+    (HISTORY / f"rev_{m['map_revision']:05d}.json").write_text(text)
+    tmp = MAP_FILE.with_suffix(".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, MAP_FILE)
+    return m["map_revision"]
+
+
+def _anchor_xy(m: dict) -> dict[str, tuple]:
+    return {a["id"]: tuple(a["position_m"][:2]) for a in m["anchors"]}
 
 
 @app.get("/api/v1/maps/latest")
@@ -35,13 +66,92 @@ def maps_latest():
     return m
 
 
+@app.get("/api/v1/maps/{revision}")
+def maps_revision(revision: int):
+    path = HISTORY / f"rev_{revision:05d}.json"
+    if not path.exists():
+        raise HTTPException(404, f"revision {revision} not in history")
+    return json.loads(path.read_text())
+
+
+@app.get("/api/v1/history")
+def history():
+    out = []
+    for path in sorted(HISTORY.glob("rev_*.json"), reverse=True)[:20]:
+        m = json.loads(path.read_text())
+        out.append({"revision": m["map_revision"], "published_at": m.get("published_at"),
+                    "note": m.get("publish_note"), "utilities": len(m["utilities"]),
+                    "model_scale": m.get("model_scale", 1.0)})
+    return out
+
+
+@app.post("/api/v1/rollback")
+def rollback(revision: int):
+    """Re-publish an old revision's content as a NEW revision. History is never rewritten."""
+    old = maps_revision(revision)
+    old["map_revision"] = latest_map()["map_revision"]
+    return {"published_revision": _publish(old, f"rollback to revision {revision}")}
+
+
+# ---------- camera ----------
+
 _surveys: deque = deque(maxlen=15)  # recent live-view measurements, median-smoothed
-_last_frame: dict = {}  # newest raw camera frame, for scanning
+_last_frame: dict = {}  # newest raw camera frame + time, for capture while the live view runs
+_cam_lock = threading.Lock()  # V4L2 allows one opener; never open the camera twice
+
+
+def _camera_index() -> int | None:
+    """Which camera to open. Override with env VISION811_CAMERA=<index>.
+    On the UNO Q the first video nodes are the SoC's codec (qcom-venus), not a camera: skip them."""
+    if os.environ.get("VISION811_CAMERA"):
+        return int(os.environ["VISION811_CAMERA"])
+    if not sys.platform.startswith("linux"):
+        return 0
+    for node in sorted(Path("/sys/class/video4linux").glob("video*"), key=lambda p: int(p.name[5:])):
+        name = (node / "name").read_text().strip().lower()
+        primary = (node / "index").read_text().strip() == "0"  # a UVC camera exposes 2 nodes; first is video
+        if primary and "venus" not in name and "codec" not in name:
+            return int(node.name[5:])
+    return None
+
+
+def _open_camera() -> cv2.VideoCapture:
+    index = _camera_index()
+    if index is None:
+        raise HTTPException(503, "no camera found: plug the webcam into the hub")
+    cam = cv2.VideoCapture(index)
+    cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))  # 1080p at a usable rate over USB 2
+    cam.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+    cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+    if not cam.isOpened():
+        raise HTTPException(503, f"camera {index} did not open")
+    return cam
+
+
+def _grab(count: int = 1) -> list[np.ndarray]:
+    """Fresh frames. Uses the live view's frames if it is running, else opens the camera briefly."""
+    if time.time() - _last_frame.get("t", 0) < 2:
+        return [_last_frame["img"]]
+    if not _cam_lock.acquire(timeout=3):
+        raise HTTPException(503, "camera busy")
+    try:
+        cam = _open_camera()
+        frames = []
+        for i in range(8 + count):  # first frames: auto-exposure still settling
+            ok, img = cam.read()
+            if ok and i >= 8:
+                frames.append(img)
+        cam.release()
+    finally:
+        _cam_lock.release()
+    if not frames:
+        raise HTTPException(503, "camera returned no frames")
+    return frames
 
 
 # Same state rules the phone uses (one source of truth).
 _RULES = {j["id"]: {e["color"]: e["cover_in"] for e in j["entries"]}
-          for j in json.loads((Path(__file__).parent.parent / "ios/App/jurisdictions.json").read_text())["jurisdictions"]}
+          for j in json.loads((ROOT / "ios/App/jurisdictions.json").read_text())["jurisdictions"]}
 MAX_ANCHOR_ERROR_PX = 25  # at 1920 px width; knob. Larger = more tolerant of bumped tags
 _BGR = {"red": (40, 40, 230), "yellow": (0, 220, 255), "orange": (0, 130, 255), "blue": (230, 90, 20),
         "green": (60, 200, 40), "purple": (200, 40, 160), "pink": (180, 105, 255), "white": (255, 255, 255)}
@@ -56,14 +166,13 @@ def _draw_ar(img: np.ndarray, tags: dict, m: dict, state: str, scale: float | No
     h, w = img.shape[:2]
     f = FOCAL_PX_AT_1920 * w / 1920
     k = np.float64([[f, 0, w / 2], [0, f, h / 2], [0, 0, 1]])
-    ok, rvec, tvec = cv2.solvePnP(np.float64([a["position_m"] for a in seen]),
-                                  np.float64([tags[int(a["id"][1:]) - 1].mean(axis=0) for a in seen]),
-                                  k, None, flags=cv2.SOLVEPNP_IPPE)
+    obj = np.float64([a["position_m"] for a in seen])
+    pix = np.float64([tags[int(a["id"][1:]) - 1].mean(axis=0) for a in seen])
+    ok, rvec, tvec = cv2.solvePnP(obj, pix, k, None, flags=cv2.SOLVEPNP_IPPE)
     if not ok:
         return
     # Anchors moved since the survey? Then the pose is wrong and anything drawn would mislead.
     # Spec 10: flag it, never silently adopt new coordinates.
-    obj, pix = np.float64([a["position_m"] for a in seen]), np.float64([tags[int(a["id"][1:]) - 1].mean(axis=0) for a in seen])
     error_px = np.linalg.norm(cv2.projectPoints(obj, rvec, tvec, k, None)[0].reshape(-1, 2) - pix, axis=1).max()
     if error_px > MAX_ANCHOR_ERROR_PX:
         cv2.rectangle(img, (0, h - 70), (w, h), (0, 0, 220), -1)
@@ -105,17 +214,18 @@ def _draw_ar(img: np.ndarray, tags: dict, m: dict, state: str, scale: float | No
     cv2.putText(img, note, (30, h - 22), cv2.FONT_HERSHEY_SIMPLEX, 1.3, (255, 255, 255), 3, cv2.LINE_AA)
 
 
-def _frames(index: int, state: str, scale: float | None):
-    cam = cv2.VideoCapture(index)
-    cam.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-    cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-    size_m = latest_map()["anchors"][0]["size_m"]
+def _frames(state: str, scale: float | None):
+    if not _cam_lock.acquire(timeout=3):
+        return  # another viewer or a capture holds the camera
     try:
+        cam = _open_camera()
+        size_m = latest_map()["anchors"][0]["size_m"]
+        _surveys.clear()
         while True:
             ok, img = cam.read()
             if not ok:
                 break
-            _last_frame["img"] = img.copy()
+            _last_frame.update(img=img.copy(), t=time.time())
             tags = detect(img)
             _draw_ar(img, tags, latest_map(), state, scale)
             for tag_id, corners in tags.items():  # outline anchors so aiming is easy
@@ -138,52 +248,151 @@ def _frames(index: int, state: str, scale: float | None):
             _, jpg = cv2.imencode(".jpg", cv2.resize(img, (960, 540)))
             yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpg.tobytes() + b"\r\n"
     finally:
-        cam.release()
+        if "cam" in locals():
+            cam.release()
+        _last_frame.pop("t", None)
+        _cam_lock.release()
 
 
 @app.get("/camera")
-def camera(index: int = 0, state: str = "WI", scale: float | None = None):
-    """Supervisor aiming aid for the overhead scan (MJPEG). Not part of the worker app."""
+def camera(state: str = "WI", scale: float | None = None):
+    """Live overhead view with anchors, distances, and the published map drawn on it (MJPEG)."""
     if scale is not None and not 0 < scale <= 1:
         raise HTTPException(422, "scale must be in (0, 1], e.g. 0.1 for 1:10")
-    _surveys.clear()
-    return StreamingResponse(_frames(index, state, scale), media_type="multipart/x-mixed-replace; boundary=frame")
+    if _camera_index() is None:
+        raise HTTPException(503, "no camera found: plug the webcam into the hub")
+    return StreamingResponse(_frames(state, scale), media_type="multipart/x-mixed-replace; boundary=frame")
 
+
+# ---------- anchor survey ----------
 
 def _measured_anchors() -> dict[str, list[float]]:
-    if not _surveys:
-        raise HTTPException(409, "no measurement yet: open /camera with A1 and A2 in view")
+    """Anchor layout from the camera: live-view measurements if running, else a fresh burst of frames."""
+    surveys = list(_surveys) if time.time() - _last_frame.get("t", 0) < 2 else []
+    if not surveys:
+        size_m = latest_map()["anchors"][0]["size_m"]
+        for img in _grab(8):
+            try:
+                surveys.append(survey(img, size_m))
+            except ValueError:
+                pass
+    if not surveys:
+        raise HTTPException(409, "cannot measure: A1 and A2 must both be in camera view")
     # A tag may fail to decode in a few frames; keep it if seen in at least half of them.
-    names = sorted(n for n in set().union(*_surveys) if 2 * sum(n in s for s in _surveys) >= len(_surveys))
-    return {n: [round(float(np.median([s[n][i] for s in _surveys if n in s])), 3) for i in (0, 1)] for n in names}
+    names = sorted(n for n in set().union(*surveys) if 2 * sum(n in s for s in surveys) >= len(surveys))
+    return {n: [round(float(np.median([s[n][i] for s in surveys if n in s])), 3) for i in (0, 1)] for n in names}
 
 
-def _save_anchors(m: dict, anchors: dict[str, list[float]]):
+def _set_anchors(m: dict, anchors: dict[str, list[float]]):
     missing = [a["id"] for a in m["anchors"] if a["id"] not in anchors]
     if missing:
         raise HTTPException(409, f"not saved: {missing} not in camera view")
     for a in m["anchors"]:
         a["position_m"] = anchors[a["id"]] + [0.0]
-    m["map_revision"] += 1  # phones reload on revision change
-    MAP_FILE.write_text(json.dumps(m, indent=2))
 
 
-# ponytail: the two endpoints below change state on GET so they work from a browser bar;
-# make them supervisor-only POST in Phase 3.
 @app.get("/api/v1/survey")
-def survey_anchors(save: bool = False):
-    """Anchor layout measured by the live view (keep /camera open). ?save=true writes it into the map."""
+def survey_read():
+    return {"anchors_m": _measured_anchors()}
+
+
+@app.post("/api/v1/survey")
+def survey_save():
+    """Measure the anchor tags with the camera and store their positions. Existing utilities were
+    placed relative to the OLD anchor positions, so they are cleared: rescan after a re-survey."""
     anchors = _measured_anchors()
-    if save:
-        _save_anchors(latest_map(), anchors)
-    return {"anchors_m": anchors, "frames": len(_surveys), "saved": save}
+    m = latest_map()
+    _set_anchors(m, anchors)
+    m["utilities"] = []
+    CANDIDATE.unlink(missing_ok=True)
+    return {"published_revision": _publish(m, "anchors re-surveyed; utilities cleared"), "anchors_m": anchors}
+
+
+# ---------- scan -> candidate -> review -> publish ----------
+
+def _make_candidate(img: np.ndarray, model_scale: float, source: str) -> dict:
+    if not 0 < model_scale <= 1:
+        raise HTTPException(422, "model_scale must be in (0, 1]")
+    try:
+        utilities, preview = scan(img, _anchor_xy(latest_map()))
+    except ScanError as e:
+        raise HTTPException(409, f"scan rejected: {e}")
+    cv2.imwrite(str(DATA / "scan_source.jpg"), img)  # spec: keep the source image
+    cv2.imwrite(str(DATA / "scan_preview.jpg"), preview)
+    candidate = {"source": source, "scanned_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                 "model_scale": model_scale, "utilities": utilities}
+    CANDIDATE.write_text(json.dumps(candidate))
+    return _candidate_summary(candidate)
+
+
+def _candidate_summary(c: dict) -> dict:
+    return {"source": c["source"], "scanned_at": c["scanned_at"], "model_scale": c["model_scale"],
+            "utilities": [{"id": u["utility_id"], "color": u["marking_color"], "class": u["utility_class"],
+                           "points": len(u["surface_marking"]["centerline_m"])} for u in c["utilities"]]}
+
+
+@app.post("/api/v1/scan")
+async def scan_upload(request: Request, model_scale: float = 1.0):
+    """Upload an overhead picture (raw image bytes as the body). It is scanned on this board against
+    the stored anchor positions. Result is a CANDIDATE: nothing reaches phones until /publish.
+    model_scale < 1 marks a scale model (0.1 = 1:10)."""
+    body = await request.body()
+    if not 0 < len(body) <= MAX_UPLOAD:
+        raise HTTPException(413, "image must be 1 byte to 20 MB")
+    img = cv2.imdecode(np.frombuffer(body, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(415, "not a readable image (JPEG or PNG)")
+    return _make_candidate(img, model_scale, "uploaded picture")
+
+
+@app.post("/api/v1/capture")
+def scan_capture(model_scale: float = 1.0):
+    """Same as /scan, but the picture comes from the overhead webcam."""
+    return _make_candidate(_grab(1)[-1], model_scale, "overhead camera")
+
+
+@app.get("/api/v1/candidate")
+def candidate():
+    if not CANDIDATE.exists():
+        raise HTTPException(404, "no candidate waiting")
+    return _candidate_summary(json.loads(CANDIDATE.read_text()))
+
+
+@app.get("/api/v1/scan/preview")
+def scan_preview():
+    path = DATA / "scan_preview.jpg"
+    if not path.exists():
+        raise HTTPException(404, "no scan yet")
+    return FileResponse(path, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/v1/publish")
+def publish():
+    """Operator approved the candidate: it becomes the map phones see."""
+    if not CANDIDATE.exists():
+        raise HTTPException(404, "no candidate waiting")
+    c = json.loads(CANDIDATE.read_text())
+    for u in c["utilities"]:
+        u["surface_marking"]["operator_reviewed"] = True
+    m = latest_map()
+    m["schema_version"] = "1.2"
+    m["utilities"] = c["utilities"]
+    m["model_scale"] = c["model_scale"]
+    revision = _publish(m, f"{c['source']}, {len(c['utilities'])} utilities, approved")
+    CANDIDATE.unlink()
+    return {"published_revision": revision}
+
+
+@app.post("/api/v1/reject")
+def reject():
+    CANDIDATE.unlink(missing_ok=True)
+    return {"ok": True}
 
 
 @app.get("/api/v1/mock")
-def mock_map(depth_m: float = 0.5, include_scan: bool = False):
-    """Publish a MOCK utility map sized to the webcam-surveyed anchor area (keep /camera open).
-    Mock lines are synthetic layout evidence. Their depth is display-only and labeled hypothetical;
-    depth_m stays null (spec safety rule 2). ?include_scan=true adds paint seen by the camera."""
+def mock_map(depth_m: float = 0.5):
+    """Dev helper: publish a MOCK utility map sized to the surveyed anchor area. Mock lines are
+    synthetic layout evidence; their depth is display-only and labeled hypothetical."""
     anchors = _measured_anchors()
     xy = np.array(list(anchors.values()))
     (x0, y0), (w, h) = xy.min(axis=0), np.ptp(xy, axis=0)
@@ -191,79 +400,52 @@ def mock_map(depth_m: float = 0.5, include_scan: bool = False):
     def at(u, v):  # fraction of the anchor area -> site meters
         return [round(float(x0 + u * w), 3), round(float(y0 + v * h), 3), 0.0]
 
-    mock = [
-        ("electric", "red", [at(0.15, 0.30), at(0.85, 0.30)]),
-        ("gas", "yellow", [at(0.15, 0.80), at(0.85, 0.55)]),
-        ("water", "blue", [at(0.50, 0.15), at(0.50, 0.50), at(0.85, 0.50)]),
-    ]
-    utilities = [{
-        "utility_class": cls, "marking_color": color,
+    mock = [("electric", "red", [at(0.15, 0.30), at(0.85, 0.30)]),
+            ("gas", "yellow", [at(0.15, 0.80), at(0.85, 0.55)]),
+            ("water", "blue", [at(0.50, 0.15), at(0.50, 0.50), at(0.85, 0.50)])]
+    m = latest_map()
+    _set_anchors(m, anchors)
+    m["schema_version"] = "1.2"
+    m["model_scale"] = 1.0
+    m["utilities"] = [{
+        "utility_id": f"U-{i + 1:03d}", "utility_class": cls, "marking_color": color,
         "surface_marking": None,
         "uploaded_layout": {"centerline_m": line, "source_file": "MOCK (generated)", "registration_status": "registered_unreviewed"},
         "depth_m": None, "depth_status": "unknown",
         "display_depth_m": depth_m, "display_depth_status": "hypothetical",
         "evidence_relationship": "registered_unreviewed",
         "excavation_clearance_authorized": False,
-    } for cls, color, line in mock]
-    if include_scan:
-        try:
-            utilities += scan(_last_frame["img"], {k: tuple(v) for k, v in anchors.items()})[0]
-        except ScanError as e:
-            raise HTTPException(409, f"scan rejected: {e}")
-    for i, u in enumerate(utilities):
-        u["utility_id"] = f"U-{i + 1:03d}"
+    } for i, (cls, color, line) in enumerate(mock)]
+    return {"published_revision": _publish(m, "mock map")}
 
+
+# ---------- status, power, page ----------
+
+@app.get("/api/v1/status")
+def status():
     m = latest_map()
-    m["schema_version"] = "1.1"  # adds display_depth_m / display_depth_status
-    m["map_status"] = "published_demonstration_only"
-    m["utilities"] = utilities
-    m["model_scale"] = 1.0
-    _save_anchors(m, anchors)
-    return {"published_revision": m["map_revision"], "anchors_m": anchors, "utilities": len(utilities)}
+    return {"ok": True, "host": socket.gethostname(), "uptime_s": round(time.time() - STARTED),
+            "published_revision": m and m["map_revision"], "published_at": m and m.get("published_at"),
+            "utilities": m and len(m["utilities"]), "model_scale": m and m.get("model_scale", 1.0),
+            "camera": _camera_index() is not None, "live_view_running": time.time() - _last_frame.get("t", 0) < 2,
+            "candidate_waiting": CANDIDATE.exists()}
 
 
-SAMPLE_DIR = MAP_FILE.parent
-MAX_UPLOAD = 20 * 1024 * 1024
-
-
-@app.post("/api/v1/scan")
-async def scan_upload(request: Request, model_scale: float = 1.0):
-    """Upload an overhead picture (raw image bytes as the body). It is scanned against the stored
-    anchor positions and published as a new revision. model_scale < 1 marks a scale model
-    (0.1 = 1:10): phones scale tolerance zones, depths, and length labels to match.
-    ponytail: no supervisor auth yet; private LAN only. Add a token before any real use."""
-    body = await request.body()
-    if not 0 < len(body) <= MAX_UPLOAD:
-        raise HTTPException(413, "image must be 1 byte to 20 MB")
-    if not 0 < model_scale <= 1:
-        raise HTTPException(422, "model_scale must be in (0, 1]")
-    img = cv2.imdecode(np.frombuffer(body, np.uint8), cv2.IMREAD_COLOR)
-    if img is None:
-        raise HTTPException(415, "not a readable image (JPEG or PNG)")
-    m = latest_map()
-    try:
-        utilities, preview = scan(img, {a["id"]: tuple(a["position_m"][:2]) for a in m["anchors"]})
-    except ScanError as e:
-        raise HTTPException(409, f"scan rejected: {e}")
-    cv2.imwrite(str(SAMPLE_DIR / "scan_source.jpg"), img)  # spec: keep the source image
-    cv2.imwrite(str(SAMPLE_DIR / "scan_preview.jpg"), preview)
-    m["schema_version"] = "1.2"  # adds model_scale
-    m["utilities"] = utilities
-    m["model_scale"] = model_scale
-    m["map_revision"] += 1
-    MAP_FILE.write_text(json.dumps(m, indent=2))
-    return {"published_revision": m["map_revision"], "model_scale": model_scale,
-            "utilities": [{"id": u["utility_id"], "color": u["marking_color"], "class": u["utility_class"]} for u in utilities]}
-
-
-@app.get("/api/v1/scan/preview")
-def scan_preview():
-    path = SAMPLE_DIR / "scan_preview.jpg"
-    if not path.exists():
-        raise HTTPException(404, "no scan yet")
-    return FileResponse(path, headers={"Cache-Control": "no-store"})
+@app.post("/api/v1/power")
+def power(action: str):
+    """Clean shutdown or reboot of the board. Needs a one-time sudoers rule (see admin panel)."""
+    if action not in ("poweroff", "reboot"):
+        raise HTTPException(422, "action must be poweroff or reboot")
+    if not sys.platform.startswith("linux"):
+        raise HTTPException(501, "power control only works on the UNO Q")
+    result = subprocess.run(["sudo", "-n", "systemctl", action], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise HTTPException(501, "not permitted yet. One-time setup on the board: "
+                                 "echo 'arduino ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff, /usr/bin/systemctl reboot' "
+                                 "| sudo tee /etc/sudoers.d/vision811-power")
+    return {"ok": True, "action": action}
 
 
 @app.get("/", response_class=HTMLResponse)
-def supervisor_page():
-    return (Path(__file__).parent / "supervisor.html").read_text()
+def admin_page():
+    return (Path(__file__).parent / "admin.html").read_text()

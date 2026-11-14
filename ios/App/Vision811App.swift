@@ -20,7 +20,7 @@ struct Vision811App: App {
 
 struct ContentView: View {
     @StateObject private var model = AppModel()
-    @AppStorage("server") private var server = "10.141.106.106:8000"
+    @AppStorage("server") private var server = "Madhacks16.local:8000"
     @AppStorage("jurisdiction") private var jurisdictionID = "WI"
     @State private var showLegend = false
 

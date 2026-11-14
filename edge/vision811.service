@@ -1,0 +1,15 @@
+# User-level systemd service: starts the edge server at boot (needs: sudo loginctl enable-linger arduino).
+# Install: mkdir -p ~/.config/systemd/user && cp ~/vision811/edge/vision811.service ~/.config/systemd/user/
+#          systemctl --user daemon-reload && systemctl --user enable --now vision811
+[Unit]
+Description=811 Vision AR edge server
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/vision811
+ExecStart=%h/vision811/.venv/bin/uvicorn edge.server:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 2
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

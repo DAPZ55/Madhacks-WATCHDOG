@@ -12,3 +12,6 @@ sample_data/scan.json
 sample_data/synthetic_photo.jpg
 # Design-tool state
 .impeccable/
+sample_data/history/
+sample_data/candidate.json
+sample_data/map.tmp
