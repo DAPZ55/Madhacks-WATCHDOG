@@ -38,52 +38,49 @@ struct Jurisdiction: Decodable, Identifiable {
     static func named(_ id: String) -> Jurisdiction { all.first { $0.id == id } ?? all[0] }
 }
 
-/// APWA uniform color code.
-let markingColors: [String: UIColor] = [
-    "red": .systemRed, "yellow": .systemYellow, "orange": .systemOrange, "blue": .systemBlue,
-    "green": .systemGreen, "purple": .systemPurple, "pink": .systemPink, "white": .white,
-]
-
 /// Table: marking color -> utility type and minimum cover, for the selected state.
 struct LegendView: View {
     let jurisdiction: Jurisdiction
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section("Rules") {
-                    LabeledContent("One-call center", value: jurisdiction.oneCall)
-                    LabeledContent("Law", value: jurisdiction.law)
-                    LabeledContent("Tolerance zone", value: String(format: "%.0f in each side", jurisdiction.toleranceIn))
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.s4) {
+                ScreenHeader(index: "Legend", title: jurisdiction.name)
+                Panel(title: "Rules") {
+                    Readout(key: "One-call", value: jurisdiction.oneCall)
+                    Readout(key: "Law", value: jurisdiction.law)
+                    Readout(key: "Tolerance zone", value: String(format: "%.0f in each side", jurisdiction.toleranceIn))
                     Text(jurisdiction.toleranceNote + (jurisdiction.toleranceVerified ? "" : " (unverified)"))
-                        .font(.footnote).foregroundStyle(.secondary)
+                        .font(Theme.body(13)).foregroundStyle(Theme.fg2).fixedSize(horizontal: false, vertical: true)
                 }
-                Section("Marking color, utility type, minimum cover") {
-                    ForEach(jurisdiction.entries) { entry in
-                        HStack(alignment: .top, spacing: 12) {
-                            Circle()
+                Panel(title: "Marking color · Utility · Minimum cover") {
+                    ForEach(Array(jurisdiction.entries.enumerated()), id: \.element.id) { index, entry in
+                        if index > 0 { Rectangle().fill(Theme.line).frame(height: Theme.hairline) }
+                        HStack(alignment: .top, spacing: Theme.s3) {
+                            Rectangle()
                                 .fill(Color(uiColor: markingColors[entry.color] ?? .gray))
-                                .overlay(Circle().stroke(.secondary))
+                                .overlay(Rectangle().strokeBorder(Theme.line, lineWidth: Theme.hairline))
                                 .frame(width: 22, height: 22)
                                 .accessibilityLabel(entry.color)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(entry.label).font(.headline)
-                                Text("Min. cover: " + entry.coverText)
-                                Text(entry.basis + (entry.verified ? "" : " (unverified)"))
-                                    .font(.footnote).foregroundStyle(.secondary)
+                                Text(entry.label).font(Theme.body(16, medium: true)).foregroundStyle(Theme.fg)
+                                Text("Min. cover: " + entry.coverText).font(Theme.body(14)).foregroundStyle(Theme.fg)
+                                HStack(alignment: .firstTextBaseline, spacing: Theme.s2) {
+                                    Text(entry.basis).font(Theme.body(12)).foregroundStyle(Theme.fg2)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    if !entry.verified { Tag(text: "Unverified", tone: .warning) }
+                                }
                             }
                         }
                     }
                 }
-                Section {
-                    Text("Minimum cover is what the rule required when the line was installed. Actual depth differs: regrading, erosion, old installations. It is never a measured depth and never permission to dig.")
-                        .font(.footnote)
-                }
+                NoticeBar(text: "Minimum cover is what the rule required at installation. Actual depth differs: regrading, erosion, old work. It is never a measured depth and never permission to dig.")
+                Button("Done") { dismiss() }.buttonStyle(.industrial)
             }
-            .navigationTitle(jurisdiction.name)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { Button("Done") { dismiss() } }
+            .padding(Theme.s4)
         }
+        .background(Theme.bg.ignoresSafeArea())
+        .preferredColorScheme(.dark)
     }
 }

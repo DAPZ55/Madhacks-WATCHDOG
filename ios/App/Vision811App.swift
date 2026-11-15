@@ -23,60 +23,18 @@ struct ContentView: View {
     @AppStorage("serverHost") private var server = "Madhacks16.local:8000"  // key renamed so the UNO Q default replaces old typed Mac addresses
     @AppStorage("jurisdiction") private var jurisdictionID = "WI"
     @State private var showLegend = false
+    @State private var showSetup = false
 
     private var jurisdiction: Jurisdiction { .named(jurisdictionID) }
 
     var body: some View {
         ARContainer(model: model, jurisdiction: jurisdiction)
             .ignoresSafeArea()
-            .overlay(alignment: .top) {
-                VStack(spacing: 0) {
-                    banner(model.mapNote)
-                    banner(model.alignNote)
-                    if let n = model.map?.discrepancies.count, n > 0 {
-                        banner("WARNING: \(n) unresolved paint vs layout discrepancy. Both paths shown.", .orange)
-                    }
-                }
-            }
-            .overlay(alignment: .bottom) {
-                VStack(spacing: 0) {
-                    HStack {
-                        Picker("State rules", selection: $jurisdictionID) {
-                            ForEach(Jurisdiction.all) { Text($0.name).tag($0.id) }
-                        }
-                        .pickerStyle(.menu)
-                        .buttonStyle(.borderedProminent)
-                        Button("Legend") { showLegend = true }
-                            .buttonStyle(.bordered)
-                        Button("Recalibrate") { model.recalibrations += 1 }
-                            .buttonStyle(.bordered)
-                            .tint(.orange)
-                        Spacer()
-                        Text(String(format: "Tolerance %.0f in", jurisdiction.toleranceIn))
-                            .font(.footnote).foregroundStyle(.white)
-                    }
-                    .padding(.horizontal, 8).padding(.top, 8)
-                    .background(.black.opacity(0.6))
-                    HStack {
-                        TextField("server ip:port", text: $server)
-                            .textFieldStyle(.roundedBorder)
-                            .keyboardType(.numbersAndPunctuation)
-                            .autocorrectionDisabled()
-                        Button("Refresh") { model.refresh(server: server) }
-                            .buttonStyle(.borderedProminent)
-                    }
-                    .padding(8)
-                    .background(.black.opacity(0.6))
-                    if let scale = model.map?.scale, scale < 1 {
-                        banner(String(format: "SCALE MODEL 1:%.0f. Lengths shown are real-world; depths and zones drawn to scale.", 1 / scale), .blue)
-                    }
-                    if model.map?.utilities.isEmpty == false {
-                        banner("SIMULATED DEPTH: pipes drawn at \(jurisdiction.name) minimum-cover rules, not measured. Real depth unknown.", .orange)
-                    }
-                    banner("Advisory demo. Not a utility locate. Depth unknown.")
-                }
-            }
+            .overlay(alignment: .top) { hud }
+            .overlay(alignment: .bottom) { dock }
             .sheet(isPresented: $showLegend) { LegendView(jurisdiction: jurisdiction) }
+            .sheet(isPresented: $showSetup) { SetupView(server: $server, model: model, jurisdiction: jurisdiction) }
+            .preferredColorScheme(.dark)
             .task {  // poll so a newly published revision reaches the phone without a tap
                 while !Task.isCancelled {
                     model.refresh(server: server)
@@ -85,13 +43,103 @@ struct ContentView: View {
             }
     }
 
-    private func banner(_ text: String, _ color: Color = .black) -> some View {
-        Text(text)
-            .font(.footnote)
-            .padding(8)
-            .frame(maxWidth: .infinity)
-            .background(color.opacity(0.7))
-            .foregroundStyle(.white)
+    /// Top: one compact status panel, then only the warnings that currently apply.
+    private var hud: some View {
+        VStack(spacing: Theme.s2) {
+            Panel(translucent: true) {
+                HStack(spacing: Theme.s2) {
+                    Text("811 Vision").font(Theme.display(22)).textCase(.uppercase).foregroundStyle(Theme.fg)
+                    Spacer()
+                    if let map = model.map {
+                        if map.scale < 1 { Tag(text: "Model 1:\(Int((1 / map.scale).rounded()))", tone: .action) }
+                        Tag(text: "Rev \(map.mapRevision)")
+                    }
+                }
+                Text(model.alignNote).font(Theme.body(14)).foregroundStyle(Theme.fg2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let problem = model.mapProblem { NoticeBar(text: problem, tone: .danger) }
+            if let n = model.map?.discrepancies.count, n > 0 {
+                NoticeBar(text: "Warning: \(n) unresolved paint vs layout discrepancy. Both paths shown.")
+            }
+        }
+        .padding(.horizontal, Theme.s3).padding(.top, Theme.s2)
+    }
+
+    /// Bottom: controls within thumb reach, then the always-on advisory strip.
+    private var dock: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: Theme.s2) {
+                if model.map?.utilities.isEmpty == false {
+                    NoticeBar(text: "Simulated depth: pipes drawn at \(jurisdiction.name) minimum-cover rules. Not measured.")
+                }
+                HStack(spacing: Theme.s2) {
+                    Menu {
+                        Picker("State rules", selection: $jurisdictionID) {
+                            ForEach(Jurisdiction.all) { Text($0.name).tag($0.id) }
+                        }
+                    } label: {
+                        Text("Rules · \(jurisdiction.id)")
+                            .font(Theme.label(16)).tracking(1.4).textCase(.uppercase).foregroundStyle(Theme.fg)
+                            .lineLimit(1).minimumScaleFactor(0.75)
+                            .frame(maxWidth: .infinity, minHeight: Theme.tapHeight)
+                            .background(Theme.surface2)
+                            .overlay(Rectangle().strokeBorder(Theme.line, lineWidth: Theme.hairline))
+                    }
+                    .accessibilityLabel("State rules: \(jurisdiction.name)")
+                    Button("Legend") { showLegend = true }.buttonStyle(.industrial)
+                    Button {
+                        showSetup = true
+                    } label: {
+                        Image(systemName: "gearshape").font(.system(size: 20))
+                    }
+                    .buttonStyle(.industrialCompact)
+                    .accessibilityLabel("Setup")
+                }
+                Button("Recalibrate") { model.recalibrations += 1 }.buttonStyle(.industrialPrimary)
+            }
+            .padding(Theme.s3)
+            .background(Theme.bg.opacity(0.82))
+            AdvisoryFooter(text: "Advisory demo · Not a utility locate · Depth unknown")
+        }
+    }
+}
+
+/// Connection and rules details, off the main screen so the camera view stays clear.
+struct SetupView: View {
+    @Binding var server: String
+    @ObservedObject var model: AppModel
+    let jurisdiction: Jurisdiction
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.s4) {
+                ScreenHeader(index: "Setup", title: "Connection")
+                Panel(title: "Edge server") {
+                    Text("Address of the UNO Q on the site Wi-Fi.").font(Theme.body(14)).foregroundStyle(Theme.fg2)
+                    TextField("host:port", text: $server)
+                        .font(Theme.mono(15)).foregroundStyle(Theme.fg)
+                        .keyboardType(.URL).autocorrectionDisabled().textInputAutocapitalization(.never)
+                        .padding(.horizontal, Theme.s3).frame(minHeight: Theme.tapHeight)
+                        .background(Theme.surface2)
+                        .overlay(Rectangle().strokeBorder(Theme.line, lineWidth: Theme.hairline))
+                        .accessibilityLabel("Edge server address")
+                    Button("Refresh map") { model.refresh(server: server) }.buttonStyle(.industrialPrimary)
+                    Text(model.mapNote).font(Theme.body(13)).foregroundStyle(model.mapProblem == nil ? Theme.fg2 : Theme.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Panel(title: "Active rules") {
+                    Readout(key: "Jurisdiction", value: jurisdiction.name)
+                    Readout(key: "One-call", value: jurisdiction.oneCall)
+                    Readout(key: "Tolerance zone", value: String(format: "%.0f in each side", jurisdiction.toleranceIn))
+                }
+                Button("Done") { dismiss() }.buttonStyle(.industrial)
+            }
+            .padding(Theme.s4)
+        }
+        .background(Theme.bg.ignoresSafeArea())
+        .preferredColorScheme(.dark)
     }
 }
 

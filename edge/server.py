@@ -17,7 +17,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 from edge.tags import FOCAL_PX_AT_1920, detect, survey
@@ -233,36 +233,47 @@ def _draw_ar(img: np.ndarray, tags: dict, m: dict, state: str, scale: float | No
     cv2.putText(img, note, (30, h - 22), cv2.FONT_HERSHEY_SIMPLEX, 1.3, (255, 255, 255), 3, cv2.LINE_AA)
 
 
-def _frames(state: str, scale: float | None):
+def _annotate(img: np.ndarray, state: str, scale: float | None) -> bytes:
+    """Draw anchors, distances, and the published map on a camera frame. Returns a 960x540 JPEG."""
     size_m = latest_map()["anchors"][0]["size_m"]
+    tags = detect(img)
+    _draw_ar(img, tags, latest_map(), state, scale)
+    for tag_id, corners in tags.items():  # outline anchors so aiming is easy
+        cv2.polylines(img, [corners.astype("int32")], True, (0, 255, 0), 6)
+        cv2.putText(img, f"A{tag_id + 1}", tuple(corners[0].astype(int)), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 0), 5)
+    try:
+        pos = survey(img, size_m, tags)
+        _surveys.append(pos)
+        mid = np.mean([c.mean(axis=0) for c in tags.values()], axis=0)
+        ids = sorted(tags, key=lambda i: np.arctan2(*(tags[i].mean(axis=0) - mid)[::-1]))
+        for a, b in zip(ids, ids[1:] + ids[:1]):  # distance along each edge of the anchor loop
+            if a == b:
+                continue
+            pa, pb = tags[a].mean(axis=0), tags[b].mean(axis=0)
+            d = np.hypot(*np.subtract(pos[f"A{a + 1}"], pos[f"A{b + 1}"]))
+            cv2.line(img, tuple(pa.astype(int)), tuple(pb.astype(int)), (0, 255, 255), 3)
+            cv2.putText(img, f"{d:.2f} m", tuple(((pa + pb) / 2).astype(int)), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 255), 5)
+    except ValueError:
+        cv2.putText(img, "need A1 + A2 in view to measure", (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 5)
+    return cv2.imencode(".jpg", cv2.resize(img, (960, 540)))[1].tobytes()
+
+
+def _frames(state: str, scale: float | None):
     seq = _cam["seq"]
     try:
         while True:
             img, seq = _next_frame(seq)
-            tags = detect(img)
-            _draw_ar(img, tags, latest_map(), state, scale)
-            for tag_id, corners in tags.items():  # outline anchors so aiming is easy
-                cv2.polylines(img, [corners.astype("int32")], True, (0, 255, 0), 6)
-                cv2.putText(img, f"A{tag_id + 1}", tuple(corners[0].astype(int)), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 0), 5)
-            try:
-                pos = survey(img, size_m, tags)
-                _surveys.append(pos)
-                mid = np.mean([c.mean(axis=0) for c in tags.values()], axis=0)
-                ids = sorted(tags, key=lambda i: np.arctan2(*(tags[i].mean(axis=0) - mid)[::-1]))
-                for a, b in zip(ids, ids[1:] + ids[:1]):  # distance along each edge of the anchor loop
-                    if a == b:
-                        continue
-                    pa, pb = tags[a].mean(axis=0), tags[b].mean(axis=0)
-                    d = np.hypot(*np.subtract(pos[f"A{a + 1}"], pos[f"A{b + 1}"]))
-                    cv2.line(img, tuple(pa.astype(int)), tuple(pb.astype(int)), (0, 255, 255), 3)
-                    cv2.putText(img, f"{d:.2f} m", tuple(((pa + pb) / 2).astype(int)), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 255), 5)
-            except ValueError:
-                cv2.putText(img, "need A1 + A2 in view to measure", (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 5)
-            _, jpg = cv2.imencode(".jpg", cv2.resize(img, (960, 540)))
-            _, jpg = cv2.imencode(".jpg", cv2.resize(img, (960, 540)))
-            yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpg.tobytes() + b"\r\n"
+            yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + _annotate(img, state, scale) + b"\r\n"
     except HTTPException:
         return  # camera unplugged mid-stream: end the stream quietly
+
+
+@app.get("/api/v1/snapshot")
+def snapshot(state: str = "WI", scale: float | None = None):
+    """One annotated camera frame (JPEG). For clients that cannot show an MJPEG stream."""
+    if scale is not None and not 0 < scale <= 1:
+        raise HTTPException(422, "scale must be in (0, 1], e.g. 0.1 for 1:10")
+    return Response(_annotate(_grab(1)[-1], state, scale), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/camera")

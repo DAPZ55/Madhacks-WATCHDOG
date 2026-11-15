@@ -1,27 +1,50 @@
 # Regenerate Xcode project: cd ios && xcodegen
+# Two apps, one design system (Shared/): Vision811 (worker AR view) and Vision811Admin (board control panel).
 name: Vision811
 options:
   bundleIdPrefix: dev.madhacks
   deploymentTarget:
     iOS: "18.0"
+settingGroups:
+  common:
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: R4K79NWG5A
 targets:
   Vision811:
     type: application
     platform: iOS
-    sources: [App]
+    sources: [App, Shared]
     info:
       path: Info.plist
       properties:
+        CFBundleDisplayName: 811 Vision
         NSCameraUsageDescription: Camera shows the site and finds anchor tags for the AR overlay.
         NSLocalNetworkUsageDescription: Downloads the site map from the local edge server.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         UILaunchScreen: {}
+        UIAppFonts: [Antonio.ttf, BarlowCondensed-Medium.ttf, BarlowCondensed-SemiBold.ttf, SpaceGrotesk.ttf]
+        UIUserInterfaceStyle: Dark
         UIRequiredDeviceCapabilities: [arkit]
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
     settings:
-      base:
-        SWIFT_VERSION: "5.0"
-        TARGETED_DEVICE_FAMILY: "1"
-        CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: R4K79NWG5A
+      groups: [common]
+  Vision811Admin:
+    type: application
+    platform: iOS
+    sources: [Admin, Shared]
+    info:
+      path: InfoAdmin.plist
+      properties:
+        CFBundleDisplayName: 811 Admin
+        NSLocalNetworkUsageDescription: Connects to the UNO Q edge board on the site Wi-Fi.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        UILaunchScreen: {}
+        UIAppFonts: [Antonio.ttf, BarlowCondensed-Medium.ttf, BarlowCondensed-SemiBold.ttf, SpaceGrotesk.ttf]
+        UIUserInterfaceStyle: Dark
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+    settings:
+      groups: [common]

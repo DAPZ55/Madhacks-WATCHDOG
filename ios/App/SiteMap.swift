@@ -54,6 +54,8 @@ struct SiteMap: Decodable {
 final class AppModel: ObservableObject {
     @Published var map: SiteMap?
     @Published var mapNote = "Loading map…"
+    /// Non-nil when the map is missing or may be stale; shown as a warning in the HUD.
+    @Published var mapProblem: String?
     @Published var alignNote = "Point camera at an anchor tag."
     /// Bumped by the Recalibrate button; the AR view restarts alignment when it changes.
     @Published var recalibrations = 0
@@ -78,16 +80,19 @@ final class AppModel: ObservableObject {
             guard let data = try? Data(contentsOf: cacheURL), let loaded = try? SiteMap.decode(data) else {
                 map = nil
                 mapNote = "No map available. Join the site Wi-Fi and tap Refresh."
+                mapProblem = mapNote
                 return
             }
             map = loaded
             if fresh {
                 mapNote = "Map revision \(loaded.mapRevision) (\(loaded.siteId))"
+                mapProblem = nil
             } else {
                 let saved = (try? cacheURL.resourceValues(forKeys: [.contentModificationDateKey]))?
                     .contentModificationDate
                 let age = saved.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "unknown time"
                 mapNote = "SERVER UNREACHABLE. Cached revision \(loaded.mapRevision) from \(age). May be out of date."
+                mapProblem = mapNote
             }
         }
     }
