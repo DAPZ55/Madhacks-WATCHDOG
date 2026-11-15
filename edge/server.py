@@ -441,6 +441,74 @@ def status():
             "candidate_waiting": CANDIDATE.exists()}
 
 
+SITE_WIFI = "811-site"  # profile made by edge/setup_wifi.sh; SSID 811-Vision, board is 10.42.0.1
+
+
+def _nm(*args: str) -> str:
+    if not sys.platform.startswith("linux"):
+        raise HTTPException(501, "network control only works on the UNO Q")
+    return subprocess.run(["nmcli", *args], capture_output=True, text=True, timeout=30).stdout
+
+
+def _wifi_profiles() -> list[str]:
+    """Saved Wi-Fi profiles, most recently used first."""
+    rows = [line.rsplit(":", 2) for line in _nm("-t", "-f", "NAME,TYPE,TIMESTAMP", "connection", "show").splitlines()]
+    wifi = [(int(r[2] or 0), r[0]) for r in rows if len(r) == 3 and r[1] == "802-11-wireless"]
+    return [name for _, name in sorted(wifi, reverse=True)]
+
+
+@app.get("/api/v1/network")
+def network():
+    if not sys.platform.startswith("linux"):
+        return {"supported": False}
+    active = [line.rsplit(":", 1)[0] for line in _nm("-t", "-f", "NAME,TYPE", "connection", "show", "--active").splitlines()
+              if line.endswith(":802-11-wireless")]
+    configured = SITE_WIFI in _wifi_profiles()
+    at_boot = configured and _nm("-g", "connection.autoconnect", "connection", "show", SITE_WIFI).strip() == "yes"
+    return {"supported": True, "site_wifi_configured": configured, "own_network_at_boot": at_boot,
+            "mode": "own_network" if SITE_WIFI in active else "joined" if active else "offline",
+            "connected_to": active[0] if active else None,
+            "addresses": [a for a in _nm("-g", "IP4.ADDRESS", "device", "show", "wlan0").replace("|", "\n").split() if a]}
+
+
+def _switch_network(own: bool):
+    """Runs after the HTTP reply has gone out, since the link the request came over is about to drop."""
+    time.sleep(1.5)
+    if own:
+        _nm("connection", "up", SITE_WIFI)
+        return
+    for name in _wifi_profiles():
+        if name != SITE_WIFI and "successfully" in _nm("connection", "up", name):
+            return
+    _nm("connection", "up", SITE_WIFI)  # hotspot not found: never leave the board unreachable
+
+
+@app.post("/api/v1/network")
+def network_switch(mode: str):
+    """mode=own: broadcast the board's own Wi-Fi. mode=join: rejoin the last hotspot/router
+    (falls back to own network if that fails). The caller's connection drops either way."""
+    if mode not in ("own", "join"):
+        raise HTTPException(422, "mode must be own or join")
+    if SITE_WIFI not in _wifi_profiles():
+        raise HTTPException(409, "own network not set up yet: run edge/setup_wifi.sh on the board")
+    threading.Thread(target=_switch_network, args=(mode == "own",), daemon=True).start()
+    return {"ok": True, "switching_to": mode}
+
+
+@app.post("/api/v1/network/boot")
+def network_boot(own: bool):
+    """own=true: at power-on, if no known hotspot/router is in range, start the board's own Wi-Fi.
+    Known networks keep priority, so the hotspot still wins when it is on."""
+    if SITE_WIFI not in _wifi_profiles():
+        raise HTTPException(409, "own network not set up yet: run edge/setup_wifi.sh on the board")
+    _nm("connection", "modify", SITE_WIFI, "connection.autoconnect", "yes" if own else "no",
+        "connection.autoconnect-priority", "-10")
+    for name in _wifi_profiles():
+        if name != SITE_WIFI:
+            _nm("connection", "modify", name, "connection.autoconnect-priority", "10")
+    return {"ok": True, "own_network_at_boot": own}
+
+
 @app.post("/api/v1/power")
 def power(action: str):
     """Clean shutdown or reboot of the board. Needs a one-time sudoers rule (see admin panel)."""

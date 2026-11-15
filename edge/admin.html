@@ -116,6 +116,18 @@
   </table>
 </section>
 
+<section aria-labelledby="h-network">
+  <h2 id="h-network">Network</h2>
+  <p id="netInfo">loading…</p>
+  <div class="row">
+    <button id="netOwn">Switch to own network (811-Vision)</button>
+    <button id="netJoin">Rejoin hotspot</button>
+  </div>
+  <label class="row"><input type="checkbox" id="netBoot"> At power-on, start own network if no hotspot is found</label>
+  <p>Switching drops this page. Then join the new network on your device and open
+     <code>http://Madhacks16.local:8000</code> (own network also: <code>http://10.42.0.1:8000</code>).</p>
+</section>
+
 <section aria-labelledby="h-power">
   <h2 id="h-power">Power</h2>
   <p>Shut down before unplugging when you can.</p>
@@ -169,6 +181,18 @@ async function refresh() {
   } catch (e) {
     $('status').replaceChildren(Object.assign(document.createElement('dd'), { textContent: 'Board unreachable', className: 'bad' }));
   }
+  try {
+    const n = await api('GET', '/api/v1/network');
+    const ready = n.supported && n.site_wifi_configured;
+    $('netInfo').textContent = !n.supported ? 'Network control is only available on the UNO Q.'
+      : (n.mode === 'own_network' ? 'Broadcasting own network 811-Vision' : n.mode === 'joined' ? 'Joined ' + n.connected_to : 'No Wi-Fi')
+        + ' · ' + (n.addresses.join(', ') || 'no address')
+        + (n.site_wifi_configured ? '' : ' · Own network not set up: run edge/setup_wifi.sh on the board.');
+    $('netOwn').disabled = !ready || n.mode === 'own_network';
+    $('netJoin').disabled = !ready || n.mode !== 'own_network';
+    $('netBoot').disabled = !ready;
+    $('netBoot').checked = !!n.own_network_at_boot;
+  } catch (e) { $('netInfo').textContent = 'Network status unavailable.'; }
   try {
     const h = await api('GET', '/api/v1/history');
     $('historyRows').replaceChildren(...(h.length ? h : [null]).map((r, i) => {
@@ -249,6 +273,25 @@ $('liveToggle').onclick = () => {
   $('liveToggle').textContent = on ? 'Stop live view' : 'Start live view';
 };
 $('liveScale').onchange = $('liveState').onchange = () => { if (!$('live').hidden) $('live').src = liveUrl(); };
+
+$('netOwn').onclick = () => {
+  if (!confirm('Switch the board to its own Wi-Fi network? This page will disconnect.')) return;
+  run($('netOwn'), 'Switching to own network', async () => {
+    await api('POST', '/api/v1/network?mode=own');
+    return 'Switching. Join Wi-Fi 811-Vision, then open http://10.42.0.1:8000';
+  });
+};
+$('netJoin').onclick = () => {
+  if (!confirm('Rejoin the hotspot? Turn the hotspot on first. This page will disconnect.')) return;
+  run($('netJoin'), 'Rejoining hotspot', async () => {
+    await api('POST', '/api/v1/network?mode=join');
+    return 'Switching. If the hotspot is not found, the board returns to its own network.';
+  });
+};
+$('netBoot').onchange = () => run($('netBoot'), 'Saving boot setting', async () => {
+  await api('POST', '/api/v1/network/boot?own=' + $('netBoot').checked);
+  return $('netBoot').checked ? 'At power-on: hotspot if found, else own network.' : 'At power-on: hotspot only.';
+});
 
 for (const action of ['reboot', 'poweroff']) {
   $(action).onclick = () => {
