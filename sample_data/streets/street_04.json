@@ -3,6 +3,7 @@
   "synthetic": true,
   "model_scale": 0.1,
   "hard": true,
+  "symbols": false,
   "note": "Hard scenes contain road paint that color detection mistakes for utility marks.",
   "utilities": [
     {

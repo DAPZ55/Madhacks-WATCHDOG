@@ -16,6 +16,7 @@ import numpy as np
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 from edge.tags import tag_image
+from tools import marking_symbols as sym
 from edge.vision import MARGIN_M
 
 PPM = 1000  # image pixels per floor meter
@@ -62,6 +63,28 @@ SCENES = [
     ]),
 ]
 
+# Scenes painted with real marking SYMBOLS (arrows, owner initials, sizes, offsets...) instead of bare
+# lines. Output marks_NN.jpg. Each mark: (kind, color, points in u,v, text...). See marking_symbols.py.
+MARK_SCENES = [
+    dict(title="Line markings: owner initials, high-pressure gas, oversized water", road="straight", center="white", marks=[
+        ("line", "red", [(0.04, 0.40), (0.96, 0.40)], "SRP"),
+        ("line", "yellow", [(0.04, 0.60), (0.96, 0.60)], 'SWG 8" HP STL'),
+        ("oversized", "blue", [(0.50, 0.04), (0.50, 0.96)], 'W 42"'),
+    ]),
+    dict(title="Conduit, buried splice, termination", road="cross", center="white", marks=[
+        ("conduit", "orange", [(0.39, 0.04), (0.39, 0.96)], "USW DUCT"),
+        ("splice", "green", [(0.61, 0.04), (0.61, 0.96)], 0.5),
+        ("termination", "red", [(0.03, 0.50), (0.20, 0.50)], 'MF 4"'),
+    ]),
+    dict(title="Offset mark, corridor, no-conflict statements", road="straight", center="white", marks=[
+        ("corridor", "purple", [(0.29, 0.41), (0.71, 0.41)], "SRP"),
+        ("offset", "yellow", [(0.45, 0.62), (0.45, 0.50)], "SWG", "12'"),
+        ("line", "blue", [(0.04, 0.60), (0.36, 0.60)], "W"),
+        ("no_conflict", "orange", [(0.50, 0.065)], "MCI"),
+        ("no_conflict", "red", [(0.50, 0.935)], "EPG"),
+    ]),
+]
+
 
 def main():
     site = json.loads((ROOT / "sample_data" / "map.json").read_text())
@@ -97,7 +120,9 @@ def main():
 
     out = ROOT / "sample_data" / "streets"
     out.mkdir(parents=True, exist_ok=True)
-    for n, scene in enumerate(SCENES, 1):
+    jobs = [(f"street_{n:02d}", sc) for n, sc in enumerate(SCENES, 1)] + \
+           [(f"marks_{n:02d}", sc) for n, sc in enumerate(MARK_SCENES, 1)]
+    for stem, scene in jobs:
         gray = texture(165, 7)  # concrete sidewalk everywhere, then carve grass and road
         gray[px(0, 0.13)[1]:px(0, 0.87)[1]] = texture(95, 6)[px(0, 0.13)[1]:px(0, 0.87)[1]]  # verge
         img = cv2.merge([gray, gray, gray]).clip(0, 255).astype(np.uint8)
@@ -143,7 +168,15 @@ def main():
         # 811 utility marks: dashed spray lines + letter, with spray dropouts
         before = img.copy()
         truth = []
-        for i, (color, pts) in enumerate(scene["utilities"], 1):
+        for i, (kind, color, pts, *extra) in enumerate(scene.get("marks", []), 1):
+            p = [np.float64(px(u, v)) for u, v in pts]
+            args = (img, p, PAINT[color], *extra) if kind == "line" else (img, *p, PAINT[color], *extra)
+            mark = getattr(sym, f"draw_{kind}")(*args)
+            # pixel -> u,v -> site meters
+            mark["points_m"] = [to_site(q[0] / W, q[1] / H) for q in mark.pop("points_px")]
+            truth.append({"utility_id": f"U-{i:03d}", "marking_color": color, "utility_class": CLASS[color],
+                          "text": " ".join(str(e) for e in extra if isinstance(e, str)), **mark})
+        for i, (color, pts) in enumerate(scene.get("utilities", []), 1):
             dashed(img, pts, PAINT[color], 16, 0.06, 0.03)
             (ua, va), (ub, vb) = pts[0], pts[1]
             side = np.array([-(vb - va) * H, (ub - ua) * W])
@@ -165,13 +198,14 @@ def main():
             img[cy - full // 2:cy - full // 2 + full, cx - full // 2:cx - full // 2 + full] = tag
 
         img = cv2.GaussianBlur(img, (3, 3), 0)
-        cv2.imwrite(str(out / f"street_{n:02d}.jpg"), img, [cv2.IMWRITE_JPEG_QUALITY, 90])
-        (out / f"street_{n:02d}.json").write_text(json.dumps({
-            "title": scene["title"], "synthetic": True, "model_scale": MODEL_SCALE, "hard": scene["hard"],
+        cv2.imwrite(str(out / f"{stem}.jpg"), img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        (out / f"{stem}.json").write_text(json.dumps({
+            "title": scene["title"], "synthetic": True, "model_scale": MODEL_SCALE, "hard": scene.get("hard", False),
+            "symbols": "marks" in scene,
             "note": "Hard scenes contain road paint that color detection mistakes for utility marks.",
             "utilities": truth,
         }, indent=2))
-        print(f"street_{n:02d}.jpg  {W}x{H}  {scene['title']}  ({len(truth)} utilities)")
+        print(f"{stem}.jpg  {W}x{H}  {scene['title']}  ({len(truth)} marks)")
 
 
 if __name__ == "__main__":

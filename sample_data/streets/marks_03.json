@@ -1,0 +1,95 @@
+{
+  "title": "Offset mark, corridor, no-conflict statements",
+  "synthetic": true,
+  "model_scale": 0.1,
+  "hard": false,
+  "symbols": true,
+  "note": "Hard scenes contain road paint that color detection mistakes for utility marks.",
+  "utilities": [
+    {
+      "utility_id": "U-001",
+      "marking_color": "purple",
+      "utility_class": "reclaimed_water",
+      "text": "SRP",
+      "type": "corridor",
+      "points_m": [
+        [
+          0.125,
+          -0.151,
+          0.0
+        ],
+        [
+          0.74,
+          -0.151,
+          0.0
+        ]
+      ]
+    },
+    {
+      "utility_id": "U-002",
+      "marking_color": "yellow",
+      "utility_class": "gas",
+      "text": "SWG 12'",
+      "type": "offset",
+      "points_m": [
+        [
+          0.359,
+          -0.383,
+          0.0
+        ],
+        [
+          0.359,
+          -0.25,
+          0.0
+        ]
+      ]
+    },
+    {
+      "utility_id": "U-003",
+      "marking_color": "blue",
+      "utility_class": "water",
+      "text": "W",
+      "type": "line",
+      "points_m": [
+        [
+          -0.241,
+          -0.361,
+          0.0
+        ],
+        [
+          0.227,
+          -0.361,
+          0.0
+        ]
+      ]
+    },
+    {
+      "utility_id": "U-004",
+      "marking_color": "orange",
+      "utility_class": "communications",
+      "text": "MCI",
+      "type": "no_conflict",
+      "points_m": [
+        [
+          0.432,
+          0.228,
+          0.0
+        ]
+      ]
+    },
+    {
+      "utility_id": "U-005",
+      "marking_color": "red",
+      "utility_class": "electric",
+      "text": "EPG",
+      "type": "no_conflict",
+      "points_m": [
+        [
+          0.432,
+          -0.729,
+          0.0
+        ]
+      ]
+    }
+  ]
+}

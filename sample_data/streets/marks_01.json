@@ -1,0 +1,67 @@
+{
+  "title": "Line markings: owner initials, high-pressure gas, oversized water",
+  "synthetic": true,
+  "model_scale": 0.1,
+  "hard": false,
+  "symbols": true,
+  "note": "Hard scenes contain road paint that color detection mistakes for utility marks.",
+  "utilities": [
+    {
+      "utility_id": "U-001",
+      "marking_color": "red",
+      "utility_class": "electric",
+      "text": "SRP",
+      "type": "line",
+      "points_m": [
+        [
+          -0.241,
+          -0.14,
+          0.0
+        ],
+        [
+          1.106,
+          -0.14,
+          0.0
+        ]
+      ]
+    },
+    {
+      "utility_id": "U-002",
+      "marking_color": "yellow",
+      "utility_class": "gas",
+      "text": "SWG 8\" HP STL",
+      "type": "line",
+      "points_m": [
+        [
+          -0.241,
+          -0.361,
+          0.0
+        ],
+        [
+          1.106,
+          -0.361,
+          0.0
+        ]
+      ]
+    },
+    {
+      "utility_id": "U-003",
+      "marking_color": "blue",
+      "utility_class": "water",
+      "text": "W 42\"",
+      "type": "oversized",
+      "points_m": [
+        [
+          0.432,
+          0.256,
+          0.0
+        ],
+        [
+          0.432,
+          -0.757,
+          0.0
+        ]
+      ]
+    }
+  ]
+}

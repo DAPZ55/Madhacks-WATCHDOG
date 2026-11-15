@@ -1,0 +1,67 @@
+{
+  "title": "Conduit, buried splice, termination",
+  "synthetic": true,
+  "model_scale": 0.1,
+  "hard": false,
+  "symbols": true,
+  "note": "Hard scenes contain road paint that color detection mistakes for utility marks.",
+  "utilities": [
+    {
+      "utility_id": "U-001",
+      "marking_color": "orange",
+      "utility_class": "communications",
+      "text": "USW DUCT",
+      "type": "conduit",
+      "points_m": [
+        [
+          0.271,
+          0.256,
+          0.0
+        ],
+        [
+          0.271,
+          -0.757,
+          0.0
+        ]
+      ]
+    },
+    {
+      "utility_id": "U-002",
+      "marking_color": "green",
+      "utility_class": "sewer",
+      "text": "",
+      "type": "splice",
+      "points_m": [
+        [
+          0.594,
+          0.256,
+          0.0
+        ],
+        [
+          0.594,
+          -0.757,
+          0.0
+        ],
+        [
+          0.594,
+          -0.251,
+          0.0
+        ]
+      ]
+    },
+    {
+      "utility_id": "U-003",
+      "marking_color": "red",
+      "utility_class": "electric",
+      "text": "MF 4\"",
+      "type": "termination",
+      "points_m": [
+        [
+          -0.256,
+          -0.25,
+          0.0
+        ]
+      ]
+    }
+  ]
+}
