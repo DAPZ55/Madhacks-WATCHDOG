@@ -91,13 +91,13 @@ final class AppModel: ObservableObject {
             }
             map = loaded
             if fresh {
-                mapNote = "Map revision \(loaded.mapRevision) (\(loaded.siteId))"
+                mapNote = "Map loaded (\(loaded.siteId))"
                 mapProblem = nil
             } else {
                 let saved = (try? cacheURL.resourceValues(forKeys: [.contentModificationDateKey]))?
                     .contentModificationDate
                 let age = saved.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "unknown time"
-                mapNote = "SERVER UNREACHABLE. Cached revision \(loaded.mapRevision) from \(age). May be out of date."
+                mapNote = "SERVER UNREACHABLE. Cached map from \(age). May be out of date."
                 mapProblem = mapNote
             }
         }

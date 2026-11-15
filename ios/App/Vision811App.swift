@@ -51,12 +51,11 @@ struct ContentView: View {
         VStack(spacing: Theme.s2) {
             Panel(translucent: true) {
                 HStack(spacing: Theme.s2) {
-                    Text("811 Vision").font(Theme.display(22)).textCase(.uppercase).foregroundStyle(Theme.fg)
+                    Text("Watchdog").font(Theme.display(22)).textCase(.uppercase).foregroundStyle(Theme.fg)
                     Spacer()
                     if let map = model.map {
                         if map.scale < 1 { Tag(text: "Model 1:\(Int((1 / map.scale).rounded()))", tone: .action) }
                         Tag(text: map.siteMode == "monitor" ? "Monitor" : "Scan", tone: map.siteMode == "monitor" ? .ok : .neutral)
-                        Tag(text: "Rev \(map.mapRevision)")
                     }
                 }
                 Text(model.alignNote).font(Theme.body(14)).foregroundStyle(Theme.fg2)

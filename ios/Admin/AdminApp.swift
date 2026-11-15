@@ -44,14 +44,6 @@ struct Candidate: Decodable, Equatable {
     let utilities: [Marking]
 }
 
-struct HistoryRow: Decodable, Identifiable {
-    let revision: Int
-    let publishedAt: String?
-    let note: String?
-    let utilities: Int
-    var id: Int { revision }
-}
-
 struct NetworkState: Decodable {
     let supported: Bool
     let siteWifiConfigured: Bool?
@@ -80,7 +72,6 @@ struct BoardError: LocalizedError {
 final class Board: ObservableObject {
     @Published var status: BoardStatus?
     @Published var candidate: Candidate?
-    @Published var history: [HistoryRow] = []
     @Published var network: NetworkState?
     @Published var reachable = true
     @Published var message = "Ready."
@@ -118,7 +109,6 @@ final class Board: ObservableObject {
             status = s
             reachable = true
             candidate = s.candidateWaiting ? try? await call("GET", "/api/v1/candidate", timeout: 4) : nil
-            history = (try? await call("GET", "/api/v1/history", timeout: 4)) ?? history
             network = try? await call("GET", "/api/v1/network", timeout: 6)
         } catch {
             reachable = false
@@ -156,7 +146,6 @@ struct RootView: View {
             SiteTab().tabItem { Label("Site", systemImage: "gauge.with.dots.needle.33percent") }
             ScanTab().tabItem { Label("Scan", systemImage: "viewfinder") }
             LiveTab().tabItem { Label("Live", systemImage: "video") }
-            HistoryTab().tabItem { Label("History", systemImage: "clock.arrow.circlepath") }
             SystemTab(host: $host).tabItem { Label("System", systemImage: "wrench.and.screwdriver") }
         }
         .tint(Theme.action)
@@ -264,7 +253,7 @@ struct SiteTab: View {
                 if let s = board.status {
                     Readout(key: "Board", value: "\(s.host), up \(s.uptimeS / 60) min")
                     Readout(key: "Camera", value: s.camera ? "Connected" : "Not found", tone: s.camera ? .ok : .danger)
-                    Readout(key: "Published", value: "Rev \(s.publishedRevision ?? 0)" + (s.publishedAt.map { " · \($0)" } ?? ""))
+                    Readout(key: "Published", value: s.publishedAt ?? "Nothing yet")
                     Readout(key: "On phones now", value: "\(s.utilities ?? 0) utilities · scale \(scaleText(s.modelScale))")
                     Readout(key: "Waiting for review", value: s.candidateWaiting ? "1 scan" : "None", tone: s.candidateWaiting ? .warning : .neutral)
                 } else {
@@ -317,7 +306,7 @@ struct SiteTab: View {
                 board.run("Re-surveying") {
                     let r: SurveyResult = try await board.call("POST", "/api/v1/survey")
                     anchors = r.anchorsM
-                    return "Tag positions saved as revision \(r.publishedRevision ?? 0). Utilities cleared: scan again."
+                    return "Tag positions saved. Utilities cleared: scan again."
                 }
             }
         }
@@ -413,8 +402,8 @@ struct ScanTab: View {
                     }
                     Button("Approve and publish to phones") {
                         board.run("Publishing") {
-                            let p: PublishResult = try await board.call("POST", "/api/v1/publish")
-                            return "Published revision \(p.publishedRevision). Phones update within 3 seconds."
+                            let _: PublishResult = try await board.call("POST", "/api/v1/publish")
+                            return "Published. Phones update within 3 seconds."
                                 + (c.includesSurvey == true ? " Camera no longer needed." : "")
                         }
                     }
@@ -503,54 +492,6 @@ struct LiveTab: View {
     }
 }
 
-// MARK: - History
-
-struct HistoryTab: View {
-    @EnvironmentObject private var board: Board
-    @State private var restore: HistoryRow?
-
-    var body: some View {
-        Screen(index: "04 · History", title: "Revisions") {
-            Panel(title: "Published revisions") {
-                if board.history.isEmpty {
-                    Text("No history yet.").font(Theme.body(15)).foregroundStyle(Theme.fg2)
-                }
-                ForEach(Array(board.history.enumerated()), id: \.element.id) { index, row in
-                    if index > 0 { Rectangle().fill(Theme.line).frame(height: Theme.hairline) }
-                    HStack(alignment: .center, spacing: Theme.s3) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: Theme.s2) {
-                                Text("Rev \(row.revision)").font(Theme.display(20)).foregroundStyle(Theme.fg)
-                                if index == 0 { Tag(text: "Current", tone: .ok) }
-                            }
-                            Text(row.note ?? "").font(Theme.body(14)).foregroundStyle(Theme.fg)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Text(row.publishedAt ?? "").font(Theme.mono(12)).foregroundStyle(Theme.fg3)
-                        }
-                        Spacer(minLength: Theme.s2)
-                        if index > 0 {
-                            Button("Restore") { restore = row }
-                                .buttonStyle(.industrialCompact)
-                                .accessibilityLabel("Restore revision \(row.revision)")
-                        }
-                    }
-                }
-            }
-            .disabled(board.busy)
-        }
-        .confirmationDialog("Restore revision \(restore?.revision ?? 0)? It is re-published as a new revision; history is kept.",
-                            isPresented: Binding(get: { restore != nil }, set: { if !$0 { restore = nil } }), titleVisibility: .visible) {
-            Button("Restore") {
-                guard let row = restore else { return }
-                board.run("Restoring revision \(row.revision)") {
-                    let p: PublishResult = try await board.call("POST", "/api/v1/rollback?revision=\(row.revision)")
-                    return "Restored as revision \(p.publishedRevision)."
-                }
-            }
-        }
-    }
-}
-
 // MARK: - System
 
 struct SystemTab: View {
@@ -580,7 +521,7 @@ struct SystemTab: View {
     }
 
     var body: some View {
-        Screen(index: "05 · System", title: "Board") {
+        Screen(index: "04 · System", title: "Board") {
             Panel(title: "Connection") {
                 Text("Board address. Works on both networks: Madhacks16.local:8000. On the board's own Wi-Fi also 10.42.0.1:8000.")
                     .font(Theme.body(14)).foregroundStyle(Theme.fg2).fixedSize(horizontal: false, vertical: true)

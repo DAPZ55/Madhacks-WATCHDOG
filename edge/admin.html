@@ -2,7 +2,7 @@
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>811 Vision AR admin</title>
+<title>Watchdog admin</title>
 <style>
   :root { color-scheme: light dark; --line: #8886; --warn: #b45309; --ok: #15803d; --bad: #b91c1c; }
   body { font: 16px/1.5 system-ui, sans-serif; max-width: 820px; margin: 0 auto; padding: 1rem; }
@@ -28,7 +28,7 @@
   .swatch { display: inline-block; width: .9em; height: .9em; border-radius: 50%; border: 1px solid var(--line); vertical-align: -.1em; margin-right: .4em; }
 </style>
 
-<h1>811 Vision AR admin</h1>
+<h1>Watchdog admin</h1>
 <p class="notice">Advisory demo. Not a utility locate. Never permission to dig.</p>
 <div id="message" role="status" aria-live="polite">Ready.</div>
 
@@ -108,14 +108,6 @@
   <img id="live" alt="Live overhead camera with detected anchors and simulated-depth pipes" hidden>
 </section>
 
-<section aria-labelledby="h-history">
-  <h2 id="h-history">History</h2>
-  <table>
-    <thead><tr><th>Rev</th><th>When</th><th>What</th><th></th></tr></thead>
-    <tbody id="historyRows"><tr><td colspan="4">loading…</td></tr></tbody>
-  </table>
-</section>
-
 <section aria-labelledby="h-network">
   <h2 id="h-network">Network</h2>
   <p id="netInfo">loading…</p>
@@ -168,7 +160,7 @@ async function refresh() {
     const rows = [
       ['Board', s.host + ', up ' + Math.floor(s.uptime_s / 60) + ' min'],
       ['Camera', s.camera ? 'connected' : 'NOT FOUND: plug webcam into hub', s.camera ? 'ok' : 'bad'],
-      ['Published', 'revision ' + s.published_revision + (s.published_at ? ', ' + s.published_at : '')],
+      ['Published', s.published_at || 'nothing yet'],
       ['On phones now', s.utilities + ' utilities, scale 1:' + Math.round(1 / s.model_scale)],
     ];
     $('status').replaceChildren(...rows.flatMap(([k, v, cls]) => {
@@ -193,25 +185,6 @@ async function refresh() {
     $('netBoot').disabled = !ready;
     $('netBoot').checked = !!n.own_network_at_boot;
   } catch (e) { $('netInfo').textContent = 'Network status unavailable.'; }
-  try {
-    const h = await api('GET', '/api/v1/history');
-    $('historyRows').replaceChildren(...(h.length ? h : [null]).map((r, i) => {
-      const tr = document.createElement('tr');
-      if (!r) { tr.append(cell('No history yet.')); return tr; }
-      tr.append(cell(r.revision), cell(r.published_at), cell(r.note));
-      const td = document.createElement('td');
-      if (i > 0) {
-        const b = document.createElement('button');
-        b.textContent = 'Restore';
-        b.setAttribute('aria-label', 'Restore revision ' + r.revision);
-        b.onclick = () => run(b, 'Restoring revision ' + r.revision, async () =>
-          'Restored as revision ' + (await api('POST', '/api/v1/rollback?revision=' + r.revision)).published_revision + '.');
-        td.append(b);
-      } else td.append('current');
-      tr.append(td);
-      return tr;
-    }));
-  } catch (e) { /* status line already reports unreachable */ }
 }
 
 let shownCandidate = '';
@@ -241,8 +214,7 @@ $('capture').onclick = () => run($('capture'), 'Capturing from camera', async ()
   const c = await api('POST', '/api/v1/capture?model_scale=' + $('scale').value);
   return c.utilities.length + ' marking(s) found. Review below, then approve.';
 });
-$('approve').onclick = () => run($('approve'), 'Publishing', async () =>
-  'Published revision ' + (await api('POST', '/api/v1/publish')).published_revision + '. Phones update within 3 seconds.');
+$('approve').onclick = () => run($('approve'), 'Publishing', async () => { await api('POST', '/api/v1/publish'); return 'Published. Phones update within 3 seconds.'; });
 $('reject').onclick = () => run($('reject'), 'Rejecting', async () => { await api('POST', '/api/v1/reject'); return 'Scan discarded. Nothing changed on phones.'; });
 
 const showSurvey = anchors => {
@@ -259,7 +231,7 @@ $('surveySave').onclick = () => {
   if (!confirm('Re-survey tags and clear published utilities? You will need to rescan.')) return;
   run($('surveySave'), 'Re-surveying', async () => {
     const r = await api('POST', '/api/v1/survey'); showSurvey(r.anchors_m);
-    return 'Tag positions saved as revision ' + r.published_revision + '. Utilities cleared: scan again.';
+    return 'Tag positions saved. Utilities cleared: scan again.';
   });
 };
 
