@@ -124,6 +124,7 @@ def _camera_reader(index: int):
     cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))  # 1080p at a usable rate over USB 2
     cam.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
     cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+    cam.set(cv2.CAP_PROP_FPS, 10)  # every frame is JPEG-decoded; 30 fps pinned a core in Monitor mode for nothing
     try:
         warmup = 8  # auto-exposure still settling
         while time.time() - _cam["wanted"] < CAMERA_IDLE_S:
@@ -373,9 +374,11 @@ def set_mode(mode: str):
 
 
 def _visible_tags() -> dict:
-    tags = detect(_grab(1)[-1])
+    # A tag at a steep angle or near the frame edge decodes in some frames and not others;
+    # judging from one frame flickers. Readable = decoded in any of 5 frames.
+    seen = set().union(*(detect(img) for img in _grab(5)))
     needed = [a["id"] for a in latest_map()["anchors"]]
-    return {"needed": needed, "visible": [n for n in needed if int(n[1:]) - 1 in tags]}
+    return {"needed": needed, "visible": [n for n in needed if int(n[1:]) - 1 in seen]}
 
 
 @app.get("/api/v1/tags")
