@@ -16,3 +16,4 @@ sample_data/history/
 sample_data/candidate.json
 sample_data/map.tmp
 ios/InfoAdmin.plist
+sample_data/settings.json

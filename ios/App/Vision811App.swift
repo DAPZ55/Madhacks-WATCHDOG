@@ -7,6 +7,9 @@ import SwiftUI
 let printedToSquareRatio: Float = 4.0 / 3.0
 /// Largest correction accepted when moving a tag onto the detected floor. Bigger gap = wrong surface.
 let maxFloorSnapM: Float = 0.30
+/// Tag spacing may differ from the map by this much before the phone warns that a tag moved.
+/// Knob: ARKit's own tag placement wobbles by a few cm, so do not set it much below 0.06.
+let anchorMismatchM: Float = 0.08
 /// See-through ground overlays so the real floor stays readable. Knobs: 0 = invisible, 1 = solid.
 let lineOpacity: Float = 0.55
 let zoneOpacity: Float = 0.5
@@ -52,13 +55,22 @@ struct ContentView: View {
                     Spacer()
                     if let map = model.map {
                         if map.scale < 1 { Tag(text: "Model 1:\(Int((1 / map.scale).rounded()))", tone: .action) }
+                        Tag(text: map.siteMode == "monitor" ? "Monitor" : "Scan", tone: map.siteMode == "monitor" ? .ok : .neutral)
                         Tag(text: "Rev \(map.mapRevision)")
                     }
                 }
                 Text(model.alignNote).font(Theme.body(14)).foregroundStyle(Theme.fg2)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let map = model.map, map.siteMode != "monitor", let at = map.publishedAt {
+                // Scan mode: nobody is watching the site, so say how old the snapshot is.
+                Text("Snapshot from \(at). Camera not watching.").labelStyle(11, Theme.fg2)
+                    .padding(.horizontal, Theme.s2).padding(.vertical, 3).background(Theme.bg.opacity(0.8))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             if let problem = model.mapProblem { NoticeBar(text: problem, tone: .danger) }
+            ForEach(model.map?.alerts ?? [], id: \.self) { alert in NoticeBar(text: alert, tone: .danger) }
+            if let warning = model.anchorWarning { NoticeBar(text: warning, tone: .danger) }
             if let n = model.map?.discrepancies.count, n > 0 {
                 NoticeBar(text: "Warning: \(n) unresolved paint vs layout discrepancy. Both paths shown.")
             }
@@ -193,6 +205,7 @@ struct ARContainer: UIViewRepresentable {
             loadedRevision = map?.mapRevision
             observed.removeAll()
             floorPoint.removeAll()
+            model.anchorWarning = nil
             aligned = false
             siteRoot.isEnabled = false
             rebuild()
@@ -305,6 +318,16 @@ struct ARContainer: UIViewRepresentable {
                 guard let t = observed[anchor.id] else { continue }
                 pairs.append((anchor.position, floorPoint[anchor.id] ?? SIMD3(t.columns.3.x, t.columns.3.y, t.columns.3.z)))
             }
+            // Phone's own anchor check (the only one in scan mode, where no camera is watching):
+            // real spacing between tags must match the map. A moved tag breaks every overlay.
+            var worst: Float = 0
+            for i in 0..<pairs.count {
+                for j in (i + 1)..<pairs.count {
+                    worst = max(worst, abs(simd_distance(pairs[i].ar, pairs[j].ar) - simd_distance(pairs[i].site, pairs[j].site)))
+                }
+            }
+            model.anchorWarning = worst > anchorMismatchM
+                ? String(format: "Anchor tags are %.0f cm off the map. A tag moved: rescan needed.", worst * 100) : nil
             // One tag: borrow heading from the tag itself. Convention: tag lies flat, its printed
             // top edge points toward site +Y. (ARKit image anchor: -Z is the image's top.)
             if pairs.count == 1, let anchor = map.anchors.first(where: { observed[$0.id] != nil }),

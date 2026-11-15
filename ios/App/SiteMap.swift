@@ -34,6 +34,10 @@ struct SiteMap: Decodable {
     let utilities: [Utility]
     /// < 1 means the site is a scale model (0.1 = 1:10). Display-only quantities are scaled by it.
     let modelScale: Float?
+    /// Live state from the board, sent with every map fetch (not part of the stored revision).
+    let siteMode: String?
+    let alerts: [String]?
+    let publishedAt: String?
     var scale: Float { min(max(modelScale ?? 1, 0.001), 1) }
 
     var hasSimulatedDepth: Bool { utilities.contains { $0.simulatedDepth != nil } }
@@ -59,6 +63,8 @@ final class AppModel: ObservableObject {
     @Published var alignNote = "Point camera at an anchor tag."
     /// Bumped by the Recalibrate button; the AR view restarts alignment when it changes.
     @Published var recalibrations = 0
+    /// Set by the phone's own check: tags it sees do not match the distances in the map.
+    @Published var anchorWarning: String?
 
     private let cacheURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("map.json")

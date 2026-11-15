@@ -63,6 +63,8 @@ def maps_latest():
     m = latest_map()
     if m is None:
         raise HTTPException(404, "no published map")
+    m["site_mode"] = _mode()   # added at reply time, not stored: they describe now, not the revision
+    m["alerts"] = _alerts()
     return m
 
 
@@ -176,24 +178,34 @@ _BGR = {"red": (40, 40, 230), "yellow": (0, 220, 255), "orange": (0, 130, 255), 
         "green": (60, 200, 40), "purple": (200, 40, 160), "pink": (180, 105, 255), "white": (255, 255, 255)}
 
 
-def _draw_ar(img: np.ndarray, tags: dict, m: dict, state: str, scale: float | None = None) -> None:
-    """Draw the published map on the camera frame: ground lines, plus pipes at SIMULATED depth
-    (state minimum-cover rule, same as the phone). Needs all 4 anchors for the camera pose."""
+def _camera_pose(tags: dict, m: dict, w: int, h: int):
+    """Camera pose from the anchor tags, plus how far (px) the tags sit from where the map says they
+    should be. Needs every anchor in view. Returns (rvec, tvec, k, error_px) or None."""
     seen = [a for a in m["anchors"] if int(a["id"][1:]) - 1 in tags]
-    if len(seen) < 4 or not m["utilities"]:
-        return
-    h, w = img.shape[:2]
+    if len(seen) < 4:
+        return None
     f = FOCAL_PX_AT_1920 * w / 1920
     k = np.float64([[f, 0, w / 2], [0, f, h / 2], [0, 0, 1]])
     obj = np.float64([a["position_m"] for a in seen])
     pix = np.float64([tags[int(a["id"][1:]) - 1].mean(axis=0) for a in seen])
     ok, rvec, tvec = cv2.solvePnP(obj, pix, k, None, flags=cv2.SOLVEPNP_IPPE)
     if not ok:
+        return None
+    error_px = float(np.linalg.norm(cv2.projectPoints(obj, rvec, tvec, k, None)[0].reshape(-1, 2) - pix, axis=1).max())
+    return rvec, tvec, k, error_px
+
+
+def _draw_ar(img: np.ndarray, tags: dict, m: dict, state: str, scale: float | None = None) -> None:
+    """Draw the published map on the camera frame: ground lines, plus pipes at SIMULATED depth
+    (state minimum-cover rule, same as the phone). Needs all 4 anchors for the camera pose."""
+    h, w = img.shape[:2]
+    pose = _camera_pose(tags, m, w, h)
+    if pose is None or not m["utilities"]:
         return
+    rvec, tvec, k, error_px = pose
     # Anchors moved since the survey? Then the pose is wrong and anything drawn would mislead.
     # Spec 10: flag it, never silently adopt new coordinates.
-    error_px = np.linalg.norm(cv2.projectPoints(obj, rvec, tvec, k, None)[0].reshape(-1, 2) - pix, axis=1).max()
-    if error_px > MAX_ANCHOR_ERROR_PX:
+    if error_px > MAX_ANCHOR_ERROR_PX * w / 1920:
         cv2.rectangle(img, (0, h - 70), (w, h), (0, 0, 220), -1)
         cv2.putText(img, f"ANCHORS MOVED ({error_px:.0f} px off map). Overlay hidden. Re-survey the site.",
                     (30, h - 22), cv2.FONT_HERSHEY_SIMPLEX, 1.3, (255, 255, 255), 3, cv2.LINE_AA)
@@ -286,13 +298,99 @@ def camera(state: str = "WI", scale: float | None = None):
     return StreamingResponse(_frames(state, scale), media_type="multipart/x-mixed-replace; boundary=frame")
 
 
+# ---------- operating mode ----------
+# scan:    camera is aimed once, the site is surveyed and scanned, then the camera is not needed.
+# monitor: camera stays aimed; the board keeps checking the anchors and warns every phone.
+SETTINGS = DATA / "settings.json"
+_monitor: dict = {"state": "off", "detail": "", "t": 0.0}
+MONITOR_MESSAGES = {
+    "anchors_moved": "Anchor tag moved. Overlay may be wrong. Re-survey needed.",
+    "view_blocked": "Monitoring paused: camera cannot see all anchor tags.",
+    "camera_offline": "Monitoring offline: overhead camera not available.",
+}
+
+
+def _mode() -> str:
+    try:
+        return json.loads(SETTINGS.read_text())["mode"]
+    except (OSError, ValueError, KeyError):
+        return "scan"
+
+
+def _alerts() -> list[str]:
+    """What every phone must be told right now. Monitoring that has silently stopped is itself an alert:
+    never let phones assume someone is watching when nobody is."""
+    if _mode() != "monitor":
+        return []
+    if time.time() - _monitor["t"] > 15:
+        return [MONITOR_MESSAGES["camera_offline"]]
+    return [MONITOR_MESSAGES[_monitor["state"]]] if _monitor["state"] in MONITOR_MESSAGES else []
+
+
+def _watchdog():
+    hidden_since = None
+    while True:
+        time.sleep(2)
+        if _mode() != "monitor":
+            _monitor.update(state="off", detail="")
+            continue
+        try:
+            img = _grab(1)[-1]
+            m = latest_map()
+            tags = detect(img)
+            pose = _camera_pose(tags, m, img.shape[1], img.shape[0])
+            if pose is None:
+                hidden_since = hidden_since or time.time()
+                if time.time() - hidden_since > 6:  # someone walking through is not an alarm
+                    seen = sum(int(a["id"][1:]) - 1 in tags for a in m["anchors"])
+                    _monitor.update(state="view_blocked", detail=f"{seen} of {len(m['anchors'])} tags visible", t=time.time())
+                continue
+            hidden_since = None
+            limit = MAX_ANCHOR_ERROR_PX * img.shape[1] / 1920
+            moved = pose[3] > limit
+            _monitor.update(state="anchors_moved" if moved else "ok", detail=f"tags {pose[3]:.0f} px from map (limit {limit:.0f})", t=time.time())
+        except HTTPException as e:
+            _monitor.update(state="camera_offline", detail=str(e.detail), t=time.time())
+        except Exception as e:  # watchdog must never die silently
+            _monitor.update(state="camera_offline", detail=f"{type(e).__name__}: {e}", t=time.time())
+
+
+threading.Thread(target=_watchdog, daemon=True).start()
+
+
+@app.post("/api/v1/mode")
+def set_mode(mode: str):
+    if mode not in ("scan", "monitor"):
+        raise HTTPException(422, "mode must be scan or monitor")
+    if mode == "monitor":
+        # Refuse to promise monitoring the board cannot deliver.
+        visible = _visible_tags()
+        if len(visible["visible"]) < len(visible["needed"]):
+            raise HTTPException(409, f"aim the camera first: {len(visible['visible'])} of {len(visible['needed'])} anchor tags visible")
+    SETTINGS.write_text(json.dumps({"mode": mode}))
+    _monitor.update(state="ok" if mode == "monitor" else "off", detail="", t=time.time())
+    return {"mode": mode}
+
+
+def _visible_tags() -> dict:
+    tags = detect(_grab(1)[-1])
+    needed = [a["id"] for a in latest_map()["anchors"]]
+    return {"needed": needed, "visible": [n for n in needed if int(n[1:]) - 1 in tags]}
+
+
+@app.get("/api/v1/tags")
+def visible_tags():
+    """Which anchor tags the camera can read right now. For aiming before a scan."""
+    return _visible_tags()
+
+
 # ---------- anchor survey ----------
 
-def _measured_anchors() -> dict[str, list[float]]:
-    """Anchor layout measured from a fresh burst of camera frames."""
+def _measured_anchors(frames: list | None = None) -> dict[str, list[float]]:
+    """Anchor layout measured from a burst of camera frames (a fresh burst unless given)."""
     size_m = latest_map()["anchors"][0]["size_m"]
     surveys = []
-    for img in _grab(8):
+    for img in frames or _grab(8):
         try:
             surveys.append(survey(img, size_m))
         except ValueError:
@@ -331,23 +429,25 @@ def survey_save():
 
 # ---------- scan -> candidate -> review -> publish ----------
 
-def _make_candidate(img: np.ndarray, model_scale: float, source: str) -> dict:
+def _make_candidate(img: np.ndarray, model_scale: float, source: str, anchors: dict | None = None) -> dict:
+    """`anchors`: freshly surveyed tag positions to scan against and to publish together with the result."""
     if not 0 < model_scale <= 1:
         raise HTTPException(422, "model_scale must be in (0, 1]")
     try:
-        utilities, preview = scan(img, _anchor_xy(latest_map()))
+        utilities, preview = scan(img, {k: tuple(v) for k, v in anchors.items()} if anchors else _anchor_xy(latest_map()))
     except ScanError as e:
         raise HTTPException(409, f"scan rejected: {e}")
     cv2.imwrite(str(DATA / "scan_source.jpg"), img)  # spec: keep the source image
     cv2.imwrite(str(DATA / "scan_preview.jpg"), preview)
     candidate = {"source": source, "scanned_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                 "model_scale": model_scale, "utilities": utilities}
+                 "model_scale": model_scale, "utilities": utilities, "anchors_m": anchors}
     CANDIDATE.write_text(json.dumps(candidate))
     return _candidate_summary(candidate)
 
 
 def _candidate_summary(c: dict) -> dict:
     return {"source": c["source"], "scanned_at": c["scanned_at"], "model_scale": c["model_scale"],
+            "includes_survey": bool(c.get("anchors_m")),
             "utilities": [{"id": u["utility_id"], "color": u["marking_color"], "class": u["utility_class"],
                            "points": len(u["surface_marking"]["centerline_m"])} for u in c["utilities"]]}
 
@@ -370,6 +470,18 @@ async def scan_upload(request: Request, model_scale: float = 1.0):
 def scan_capture(model_scale: float = 1.0):
     """Same as /scan, but the picture comes from the overhead webcam."""
     return _make_candidate(_grab(1)[-1], model_scale, "overhead camera")
+
+
+@app.post("/api/v1/scan_site")
+def scan_site(model_scale: float = 1.0):
+    """One-time scan: survey the anchor tags AND scan the markings from the same burst of frames, so
+    the two always agree. After this is approved the camera is no longer needed."""
+    frames = _grab(8)
+    anchors = _measured_anchors(frames)
+    missing = [a["id"] for a in latest_map()["anchors"] if a["id"] not in anchors]
+    if missing:
+        raise HTTPException(409, f"cannot scan: {missing} not in camera view")
+    return _make_candidate(frames[-1], model_scale, "one-time site scan", anchors)
 
 
 @app.get("/api/v1/candidate")
@@ -397,6 +509,8 @@ def publish():
         u["surface_marking"]["operator_reviewed"] = True
     m = latest_map()
     m["schema_version"] = "1.2"
+    if c.get("anchors_m"):
+        _set_anchors(m, c["anchors_m"])
     m["utilities"] = c["utilities"]
     m["model_scale"] = c["model_scale"]
     revision = _publish(m, f"{c['source']}, {len(c['utilities'])} utilities, approved")
@@ -449,7 +563,8 @@ def status():
             "published_revision": m and m["map_revision"], "published_at": m and m.get("published_at"),
             "utilities": m and len(m["utilities"]), "model_scale": m and m.get("model_scale", 1.0),
             "camera": _camera_index() is not None, "camera_active": bool(_cam["thread"] and _cam["thread"].is_alive()),
-            "candidate_waiting": CANDIDATE.exists()}
+            "candidate_waiting": CANDIDATE.exists(),
+            "mode": _mode(), "monitor_state": _monitor["state"], "monitor_detail": _monitor["detail"], "alerts": _alerts()}
 
 
 SITE_WIFI = "811-site"  # profile made by edge/setup_wifi.sh; SSID 811-Vision, board is 10.42.0.1

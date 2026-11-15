@@ -23,6 +23,10 @@ struct BoardStatus: Decodable {
     let modelScale: Double?
     let camera: Bool
     let candidateWaiting: Bool
+    let mode: String?
+    let monitorState: String?
+    let monitorDetail: String?
+    var isMonitor: Bool { mode == "monitor" }
 }
 
 struct Candidate: Decodable, Equatable {
@@ -36,6 +40,7 @@ struct Candidate: Decodable, Equatable {
     let source: String
     let scannedAt: String
     let modelScale: Double
+    let includesSurvey: Bool?
     let utilities: [Marking]
 }
 
@@ -62,6 +67,8 @@ struct SurveyResult: Decodable {
 }
 
 struct PublishResult: Decodable { let publishedRevision: Int }
+struct TagsInView: Decodable { let needed: [String]; let visible: [String] }
+struct ModeResult: Decodable { let mode: String }
 struct Ack: Decodable {}
 
 struct BoardError: LocalizedError {
@@ -264,6 +271,28 @@ struct SiteTab: View {
                     Text("Waiting for the board…").font(Theme.body(15)).foregroundStyle(Theme.fg2)
                 }
             }
+            Panel(title: "Operating mode") {
+                Choice(label: "Mode", options: [(value: "scan", title: "Scan once"), (value: "monitor", title: "Monitor")],
+                       selection: Binding(get: { board.status?.mode ?? "scan" }, set: { new in
+                           guard new != board.status?.mode else { return }
+                           board.run("Switching to \(new) mode") {
+                               let r: ModeResult = try await board.call("POST", "/api/v1/mode?mode=\(new)")
+                               return r.mode == "monitor" ? "Monitor mode: board is watching the anchor tags. Keep the camera aimed."
+                                                          : "Scan mode: aim once, scan, then the camera is not needed."
+                           }
+                       }))
+                if board.status?.isMonitor == true {
+                    let state = board.status?.monitorState ?? ""
+                    Readout(key: "Watchdog", value: state == "ok" ? "Tags in place" : state.replacingOccurrences(of: "_", with: " ").capitalized,
+                            tone: state == "ok" ? .ok : .danger)
+                    Text("Fixed camera. Board checks the anchor tags every 2 seconds and warns every phone if a tag moves, the view is blocked, or the camera drops. " + (board.status?.monitorDetail ?? ""))
+                        .font(Theme.body(14)).foregroundStyle(Theme.fg2).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("One-time scan. Aim the camera, scan from the Scan tab, approve. After that the camera can be moved or unplugged; phones check the tags themselves.")
+                        .font(Theme.body(14)).foregroundStyle(Theme.fg2).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .disabled(board.busy)
             Panel(title: "Anchor tags") {
                 Text("Run after moving any tag or the camera. Saving clears published utilities, because they were placed against the old tag positions.")
                     .font(Theme.body(14)).foregroundStyle(Theme.fg2).fixedSize(horizontal: false, vertical: true)
@@ -301,9 +330,43 @@ struct ScanTab: View {
     @EnvironmentObject private var board: Board
     @AppStorage("scanScale") private var scale = "0.1"
     @State private var picked: PhotosPickerItem?
+    @State private var tags: TagsInView?
+
+    private var scanMode: Bool { board.status?.isMonitor != true }
+    private var allTagsVisible: Bool { tags.map { $0.visible.count == $0.needed.count } ?? false }
 
     var body: some View {
         Screen(index: "02 · Scan", title: "Scan and publish") {
+            if scanMode {
+                Panel(title: "One-time site scan") {
+                    if let tags {
+                        Readout(key: "Tags in view", value: "\(tags.visible.count) of \(tags.needed.count)" + (tags.visible.isEmpty ? "" : " · " + tags.visible.joined(separator: " ")),
+                                tone: allTagsVisible ? .ok : .warning)
+                    } else {
+                        Readout(key: "Tags in view", value: board.status?.camera == true ? "Checking…" : "No camera", tone: .warning)
+                    }
+                    Text("Aim the camera until every anchor tag is in view. One press then measures the tags and scans the markings together. After approval the camera is no longer needed.")
+                        .font(Theme.body(14)).foregroundStyle(Theme.fg2).fixedSize(horizontal: false, vertical: true)
+                    Button("Scan site now") {
+                        board.run("Surveying tags and scanning") {
+                            let c: Candidate = try await board.call("POST", "/api/v1/scan_site?model_scale=\(scale)", timeout: 60)
+                            return "\(c.utilities.count) marking(s) found. Review below, then approve."
+                        }
+                    }
+                    .buttonStyle(.industrialPrimary)
+                    .disabled(!allTagsVisible)
+                }
+                .disabled(board.busy)
+                // Poll tag visibility only while this panel is on screen; stopping frees the camera.
+                .task {
+                    while !Task.isCancelled {
+                        if board.status?.camera == true, !board.busy {
+                            tags = try? await board.call("GET", "/api/v1/tags", timeout: 8)
+                        }
+                        try? await Task.sleep(for: .seconds(1.5))
+                    }
+                }
+            }
             Panel(title: "1 · Get a picture") {
                 Choice(label: "Scale", options: scaleOptions, selection: $scale)
                 PhotosPicker(selection: $picked, matching: .images) {
@@ -313,14 +376,16 @@ struct ScanTab: View {
                         .background(Theme.surface2)
                         .overlay(Rectangle().strokeBorder(Theme.line, lineWidth: Theme.hairline))
                 }
-                Button("Capture from overhead camera") {
-                    board.run("Capturing from camera") {
-                        let c: Candidate = try await board.call("POST", "/api/v1/capture?model_scale=\(scale)")
-                        return "\(c.utilities.count) marking(s) found. Review below, then approve."
+                if !scanMode {
+                    Button("Capture from overhead camera") {
+                        board.run("Capturing from camera") {
+                            let c: Candidate = try await board.call("POST", "/api/v1/capture?model_scale=\(scale)")
+                            return "\(c.utilities.count) marking(s) found. Review below, then approve."
+                        }
                     }
+                    .buttonStyle(.industrial)
+                    .disabled(board.status?.camera != true)
                 }
-                .buttonStyle(.industrial)
-                .disabled(board.status?.camera != true)
                 Text("Picture must show all 4 anchor tags. Processing happens on the board.")
                     .font(Theme.body(13)).foregroundStyle(Theme.fg2)
             }
@@ -328,7 +393,7 @@ struct ScanTab: View {
 
             Panel(title: "2 · Review, then publish") {
                 if let c = board.candidate {
-                    Text("From \(c.source) at \(c.scannedAt), scale \(scaleText(c.modelScale)). Not on phones until approved.")
+                    Text("From \(c.source) at \(c.scannedAt), scale \(scaleText(c.modelScale))." + (c.includesSurvey == true ? " Includes new tag positions." : "") + " Not on phones until approved.")
                         .font(Theme.body(14)).foregroundStyle(Theme.fg2).fixedSize(horizontal: false, vertical: true)
                     ForEach(c.utilities) { marking in
                         HStack(spacing: Theme.s3) {
@@ -346,23 +411,11 @@ struct ScanTab: View {
                     if c.utilities.isEmpty {
                         NoticeBar(text: "No markings detected in this picture.")
                     }
-                    // scannedAt in the URL: a new scan gets a new URL, so the preview never shows a stale image.
-                    AsyncImage(url: board.url("/api/v1/scan/preview?t=\(c.scannedAt.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "")")) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image.resizable().scaledToFit()
-                                .accessibilityLabel("Scan result: detected marking centerlines on the top-down view")
-                        case .failure:
-                            Text("Preview unavailable.").font(Theme.body(13)).foregroundStyle(Theme.fg2)
-                        default:
-                            ProgressView().tint(Theme.action).frame(maxWidth: .infinity, minHeight: 120)
-                        }
-                    }
-                    .overlay(Rectangle().strokeBorder(Theme.line, lineWidth: Theme.hairline))
                     Button("Approve and publish to phones") {
                         board.run("Publishing") {
                             let p: PublishResult = try await board.call("POST", "/api/v1/publish")
                             return "Published revision \(p.publishedRevision). Phones update within 3 seconds."
+                                + (c.includesSurvey == true ? " Camera no longer needed." : "")
                         }
                     }
                     .buttonStyle(.industrialPrimary)
