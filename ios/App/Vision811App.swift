@@ -20,7 +20,7 @@ struct Vision811App: App {
 
 struct ContentView: View {
     @StateObject private var model = AppModel()
-    @AppStorage("server") private var server = "Madhacks16.local:8000"
+    @AppStorage("serverHost") private var server = "Madhacks16.local:8000"  // key renamed so the UNO Q default replaces old typed Mac addresses
     @AppStorage("jurisdiction") private var jurisdictionID = "WI"
     @State private var showLegend = false
 
