@@ -70,9 +70,6 @@ struct ContentView: View {
     private var dock: some View {
         VStack(spacing: 0) {
             VStack(spacing: Theme.s2) {
-                if model.map?.utilities.isEmpty == false {
-                    NoticeBar(text: "Simulated depth: pipes drawn at \(jurisdiction.name) minimum-cover rules. Not measured.")
-                }
                 HStack(spacing: Theme.s2) {
                     Menu {
                         Picker("State rules", selection: $jurisdictionID) {
